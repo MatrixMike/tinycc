@@ -28,12 +28,11 @@ typedef signed char int8_t;
 typedef short int int16_t;
 typedef int int32_t;
 typedef long long int int64_t;
-#endif
-
 typedef unsigned char           uint8_t;
 typedef unsigned short int      uint16_t;
 typedef unsigned int            uint32_t;
 typedef unsigned long long int  uint64_t;
+#endif
 #endif
 
 /* Standard ELF types.  */
@@ -160,7 +159,12 @@ typedef struct
 #define ELFOSABI_TRU64		10	/* Compaq TRU64 UNIX.  */
 #define ELFOSABI_MODESTO	11	/* Novell Modesto.  */
 #define ELFOSABI_OPENBSD	12	/* OpenBSD.  */
-#define ELFOSABI_ARM_AEABI	64	/* ARM EABI */
+#define ELFOSABI_OPENVMS        13
+#define ELFOSABI_NSK            14      /* Hewlett-Packard Non-Stop Kernel.  */
+#define ELFOSABI_AROS           15      /* Amiga Research OS.  */
+#define ELFOSABI_FENIXOS        16      /* FenixOS.  */
+#define ELFOSABI_ARM_AEABI	64	/* ARM EABI.  */
+#define ELFOSABI_C6000_LINUX    65      /* Linux TMS320C6000.  */
 #define ELFOSABI_ARM		97	/* ARM */
 #define ELFOSABI_STANDALONE	255	/* Standalone (embedded) application */
 
@@ -222,7 +226,7 @@ typedef struct
 #define EM_68HC12	53		/* Motorola M68HC12 */
 #define EM_MMA		54		/* Fujitsu MMA Multimedia Accelerator*/
 #define EM_PCP		55		/* Siemens PCP */
-#define EM_NCPU		56		/* Sony nCPU embeeded RISC */
+#define EM_NCPU		56		/* Sony nCPU embedded RISC */
 #define EM_NDR1		57		/* Denso NDR1 microprocessor */
 #define EM_STARCORE	58		/* Motorola Start*Core processor */
 #define EM_ME16		59		/* Toyota ME16 processor */
@@ -233,7 +237,7 @@ typedef struct
 
 #define EM_FX66		66		/* Siemens FX66 microcontroller */
 #define EM_ST9PLUS	67		/* STMicroelectronics ST9+ 8/16 mc */
-#define EM_ST7		68		/* STmicroelectronics ST7 8 bit mc */
+#define EM_ST7		68		/* STMicroelectronics ST7 8 bit mc */
 #define EM_68HC16	69		/* Motorola MC68HC16 microcontroller */
 #define EM_68HC11	70		/* Motorola MC68HC11 microcontroller */
 #define EM_68HC08	71		/* Motorola MC68HC08 microcontroller */
@@ -263,7 +267,8 @@ typedef struct
 #define EM_AARCH64	183		/* ARM AARCH64 */
 #define EM_TILEPRO	188		/* Tilera TILEPro */
 #define EM_TILEGX	191		/* Tilera TILE-Gx */
-#define EM_NUM		192
+#define EM_RISCV	243	        /* RISC-V */
+#define EM_NUM		253
 
 /* If it is necessary to assign new unofficial EM_* values, please
    pick large random numbers (0x8523, 0xa7f2, etc.) to minimize the
@@ -343,7 +348,7 @@ typedef struct
 #define SHT_FINI_ARRAY	  15		/* Array of destructors */
 #define SHT_PREINIT_ARRAY 16		/* Array of pre-constructors */
 #define SHT_GROUP	  17		/* Section group */
-#define SHT_SYMTAB_SHNDX  18		/* Extended section indeces */
+#define SHT_SYMTAB_SHNDX  18		/* Extended section indices */
 #define	SHT_NUM		  19		/* Number of defined types.  */
 #define SHT_LOOS	  0x60000000	/* Start OS-specific.  */
 #define SHT_GNU_ATTRIBUTES 0x6ffffff5	/* Object attributes.  */
@@ -377,11 +382,12 @@ typedef struct
 					   required */
 #define SHF_GROUP	     (1 << 9)	/* Section is member of a group.  */
 #define SHF_TLS		     (1 << 10)	/* Section hold thread-local data.  */
+#define SHF_COMPRESSED	     (1 << 11)	/* Section with compressed data. */
 #define SHF_MASKOS	     0x0ff00000	/* OS-specific.  */
 #define SHF_MASKPROC	     0xf0000000	/* Processor-specific */
 #define SHF_ORDERED	     (1 << 30)	/* Special ordering requirement
 					   (Solaris).  */
-#define SHF_EXCLUDE	     (1 << 31)	/* Section is excluded unless
+#define SHF_EXCLUDE	     (1U << 31)	/* Section is excluded unless
 					   referenced or allocated (Solaris).*/
 
 /* Section group handling.  */
@@ -817,8 +823,9 @@ typedef struct
 #define	DF_1_EDITED	0x00200000	/* Object is modified after built.  */
 #define	DF_1_NORELOC	0x00400000
 #define	DF_1_SYMINTPOSE	0x00800000	/* Object has individual interposers.  */
-#define	DF_1_GLOBAUDIT	0x01000000	/* Global auditin required.  */
+#define	DF_1_GLOBAUDIT	0x01000000	/* Global auditing required.  */
 #define	DF_1_SINGLETON	0x02000000	/* Singleton symbols are used.  */
+#define	DF_1_PIE	0x08000000
 
 /* Flags for the feature selection in DT_FEATURE_1.  */
 #define DTF_1_PARINIT	0x00000001
@@ -871,7 +878,7 @@ typedef struct
 #define	VER_NDX_LORESERVE	0xff00	/* Beginning of reserved entries.  */
 #define	VER_NDX_ELIMINATE	0xff01	/* Symbol is to be eliminated.  */
 
-/* Auxialiary version information.  */
+/* Auxiliary version information.  */
 
 typedef struct
 {
@@ -1313,7 +1320,7 @@ typedef struct
 #define R_SPARC_LM22		36	/* Low middle 22 bits of ... */
 #define R_SPARC_PC_HH22		37	/* Top 22 bits of pc rel 64 bit */
 #define R_SPARC_PC_HM10		38	/* High middle 10 bit of ... */
-#define R_SPARC_PC_LM22		39	/* Low miggle 22 bits of ... */
+#define R_SPARC_PC_LM22		39	/* Low middle 22 bits of ... */
 #define R_SPARC_WDISP16		40	/* PC relative 16 bit shifted */
 #define R_SPARC_WDISP19		41	/* PC relative 19 bit shifted */
 #define R_SPARC_GLOB_JMP	42	/* was part of v9 ABI but was removed */
@@ -1776,9 +1783,9 @@ typedef Elf32_Addr Elf32_Conflict;
 #define EFA_PARISC_1_1		    0x0210 /* PA-RISC 1.1 big-endian.  */
 #define EFA_PARISC_2_0		    0x0214 /* PA-RISC 2.0 big-endian.  */
 
-/* Additional section indeces.  */
+/* Additional section indices.  */
 
-#define SHN_PARISC_ANSI_COMMON	0xff00	   /* Section for tenatively declared
+#define SHN_PARISC_ANSI_COMMON	0xff00	   /* Section for tentatively declared
 					      symbols in ANSI C.  */
 #define SHN_PARISC_HUGE_COMMON	0xff01	   /* Common blocks in huge model.  */
 
@@ -1957,7 +1964,7 @@ typedef Elf32_Addr Elf32_Conflict;
 
 /* Legal values for sh_type field of Elf64_Shdr.  */
 
-/* These two are primerily concerned with ECOFF debugging info.  */
+/* These two are primarily concerned with ECOFF debugging info.  */
 #define SHT_ALPHA_DEBUG		0x70000001
 #define SHT_ALPHA_REGINFO	0x70000002
 
@@ -2457,6 +2464,8 @@ typedef Elf32_Addr Elf32_Conflict;
 #define R_AARCH64_TLS_TPREL64  1030	/* TP-relative offset, 64 bit.  */
 #define R_AARCH64_TLSDESC      1031	/* TLS Descriptor.  */
 #define R_AARCH64_IRELATIVE    1032	/* STT_GNU_IFUNC relocation.  */
+/* Keep this the last entry.  */
+#define R_AARCH64_NUM          1033
 
 /* ARM relocs.  */
 
@@ -2492,22 +2501,30 @@ typedef Elf32_Addr Elf32_Conflict;
 #define R_ARM_CALL		28
 #define R_ARM_JUMP24		29
 #define R_ARM_THM_JUMP24	30
+#define R_ARM_BASE_ABS  31  /* Adjust by program base.  */
 #define R_ARM_ALU_PCREL_7_0	32
 #define R_ARM_ALU_PCREL_15_8	33
 #define R_ARM_ALU_PCREL_23_15	34
 #define R_ARM_LDR_SBREL_11_0	35
 #define R_ARM_ALU_SBREL_19_12	36
 #define R_ARM_ALU_SBREL_27_20	37
+#define R_ARM_TARGET1 38
+#define R_ARM_SBREL31 39  /* Program base relative.  */
 #define R_ARM_V4BX		40
+#define R_ARM_TARGET2   41
 #define R_ARM_PREL31		42
 #define R_ARM_MOVW_ABS_NC	43
 #define R_ARM_MOVT_ABS		 44
+#define R_ARM_MOVW_PREL_NC  45	/* PC relative 16-bit (MOVW).  */
+#define R_ARM_MOVT_PREL 46  /* PC relative (MOVT).  */
 #define R_ARM_THM_MOVW_ABS_NC	47
 #define R_ARM_THM_MOVT_ABS	48
+/* Values from 49 to 89 are not yet used/handled by tcc. */
 #define R_ARM_TLS_GOTDESC	90
 #define R_ARM_TLS_CALL		91
 #define R_ARM_TLS_DESCSEQ	92
 #define R_ARM_THM_TLS_CALL	93
+#define R_ARM_GOT_PREL		96
 #define R_ARM_GNU_VTENTRY	100
 #define R_ARM_GNU_VTINHERIT	101
 #define R_ARM_THM_PC11		102	/* thumb unconditional branch */
@@ -2549,8 +2566,10 @@ typedef Elf32_Addr Elf32_Conflict;
 #define R_C60_GOTOFF    9               /* 32 bit offset to GOT */
 #define R_C60_GOTPC     10              /* 32 bit PC relative offset to GOT */
 
-#define R_C60HI16      0x55       /* high 16 bit MVKH embedded */
 #define R_C60LO16      0x54       /* low 16 bit MVKL embedded */
+#define R_C60HI16      0x55       /* high 16 bit MVKH embedded */
+/* Keep this the last entry.  */
+#define R_C60_NUM      0x56
 
 /* IA-64 specific declarations.  */
 
@@ -2901,8 +2920,10 @@ typedef Elf32_Addr Elf32_Conflict;
 #define R_X86_64_REX_GOTPCRELX	42      /* like GOTPCRELX, but a REX prefix
 					   is present */
 
-#define R_X86_64_NUM		39
+#define R_X86_64_NUM		43
 
+/* x86-64 sh_type values.  */
+#define SHT_X86_64_UNWIND       0x70000001 /* Unwind information.  */
 
 /* AM33 relocations.  */
 #define R_MN10300_NONE		0	/* No reloc.  */
@@ -3228,6 +3249,72 @@ typedef Elf32_Addr Elf32_Conflict;
 #define R_TILEGX_GNU_VTENTRY	129	/* GNU C++ vtable member usage */
 
 #define R_TILEGX_NUM		130
+
+/* RISC-V ELF Flags */
+#define EF_RISCV_RVC 			0x0001
+#define EF_RISCV_FLOAT_ABI 		0x0006
+#define EF_RISCV_FLOAT_ABI_SOFT 	0x0000
+#define EF_RISCV_FLOAT_ABI_SINGLE 	0x0002
+#define EF_RISCV_FLOAT_ABI_DOUBLE 	0x0004
+#define EF_RISCV_FLOAT_ABI_QUAD 	0x0006
+
+/* RISC-V relocations.  */
+#define R_RISCV_NONE		 0
+#define R_RISCV_32		 1
+#define R_RISCV_64		 2
+#define R_RISCV_RELATIVE	 3
+#define R_RISCV_COPY		 4
+#define R_RISCV_JUMP_SLOT	 5
+#define R_RISCV_TLS_DTPMOD32	 6
+#define R_RISCV_TLS_DTPMOD64	 7
+#define R_RISCV_TLS_DTPREL32	 8
+#define R_RISCV_TLS_DTPREL64	 9
+#define R_RISCV_TLS_TPREL32	10
+#define R_RISCV_TLS_TPREL64	11
+#define R_RISCV_BRANCH		16
+#define R_RISCV_JAL		17
+#define R_RISCV_CALL		18
+#define R_RISCV_CALL_PLT	19
+#define R_RISCV_GOT_HI20	20
+#define R_RISCV_TLS_GOT_HI20	21
+#define R_RISCV_TLS_GD_HI20	22
+#define R_RISCV_PCREL_HI20	23
+#define R_RISCV_PCREL_LO12_I	24
+#define R_RISCV_PCREL_LO12_S	25
+#define R_RISCV_HI20		26
+#define R_RISCV_LO12_I		27
+#define R_RISCV_LO12_S		28
+#define R_RISCV_TPREL_HI20	29
+#define R_RISCV_TPREL_LO12_I	30
+#define R_RISCV_TPREL_LO12_S	31
+#define R_RISCV_TPREL_ADD	32
+#define R_RISCV_ADD8		33
+#define R_RISCV_ADD16		34
+#define R_RISCV_ADD32		35
+#define R_RISCV_ADD64		36
+#define R_RISCV_SUB8		37
+#define R_RISCV_SUB16		38
+#define R_RISCV_SUB32		39
+#define R_RISCV_SUB64		40
+#define R_RISCV_GNU_VTINHERIT	41
+#define R_RISCV_GNU_VTENTRY	42
+#define R_RISCV_ALIGN		43
+#define R_RISCV_RVC_BRANCH	44
+#define R_RISCV_RVC_JUMP	45
+#define R_RISCV_RVC_LUI		46
+#define R_RISCV_GPREL_I		47
+#define R_RISCV_GPREL_S		48
+#define R_RISCV_TPREL_I		49
+#define R_RISCV_TPREL_S		50
+#define R_RISCV_RELAX		51
+#define R_RISCV_SUB6		52
+#define R_RISCV_SET6		53
+#define R_RISCV_SET8		54
+#define R_RISCV_SET16		55
+#define R_RISCV_SET32		56
+#define R_RISCV_32_PCREL	57
+
+#define R_RISCV_NUM		58
 
 
 #endif	/* elf.h */

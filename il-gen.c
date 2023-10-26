@@ -18,6 +18,8 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 
+#error this code has bit-rotted since 2003
+
 /* number of available registers */
 #define NB_REGS             3
 
@@ -600,7 +602,7 @@ void gen_opi(int op)
 }
 
 /* generate a floating point operation 'v = t1 op t2' instruction. The
-   two operands are guaranted to have the same floating point type */
+   two operands are guaranteed to have the same floating point type */
 void gen_opf(int op)
 {
     /* same as integer */

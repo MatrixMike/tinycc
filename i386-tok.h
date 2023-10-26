@@ -1,6 +1,82 @@
 /* ------------------------------------------------------------------ */
 /* WARNING: relative order of tokens is important. */
 
+#define DEF_BWL(x) \
+ DEF(TOK_ASM_ ## x ## b, #x "b") \
+ DEF(TOK_ASM_ ## x ## w, #x "w") \
+ DEF(TOK_ASM_ ## x ## l, #x "l") \
+ DEF(TOK_ASM_ ## x, #x)
+#define DEF_WL(x) \
+ DEF(TOK_ASM_ ## x ## w, #x "w") \
+ DEF(TOK_ASM_ ## x ## l, #x "l") \
+ DEF(TOK_ASM_ ## x, #x)
+#ifdef TCC_TARGET_X86_64
+# define DEF_BWLQ(x) \
+ DEF(TOK_ASM_ ## x ## b, #x "b") \
+ DEF(TOK_ASM_ ## x ## w, #x "w") \
+ DEF(TOK_ASM_ ## x ## l, #x "l") \
+ DEF(TOK_ASM_ ## x ## q, #x "q") \
+ DEF(TOK_ASM_ ## x, #x)
+# define DEF_WLQ(x) \
+ DEF(TOK_ASM_ ## x ## w, #x "w") \
+ DEF(TOK_ASM_ ## x ## l, #x "l") \
+ DEF(TOK_ASM_ ## x ## q, #x "q") \
+ DEF(TOK_ASM_ ## x, #x)
+# define DEF_BWLX DEF_BWLQ
+# define DEF_WLX DEF_WLQ
+/* number of sizes + 1 */
+# define NBWLX 5
+#else
+# define DEF_BWLX DEF_BWL
+# define DEF_WLX DEF_WL
+/* number of sizes + 1 */
+# define NBWLX 4
+#endif
+
+#define DEF_FP1(x) \
+ DEF(TOK_ASM_ ## f ## x ## s, "f" #x "s") \
+ DEF(TOK_ASM_ ## fi ## x ## l, "fi" #x "l") \
+ DEF(TOK_ASM_ ## f ## x ## l, "f" #x "l") \
+ DEF(TOK_ASM_ ## fi ## x ## s, "fi" #x "s")
+
+#define DEF_FP(x) \
+ DEF(TOK_ASM_ ## f ## x, "f" #x ) \
+ DEF(TOK_ASM_ ## f ## x ## p, "f" #x "p") \
+ DEF_FP1(x)
+
+#define DEF_ASMTEST(x,suffix) \
+ DEF_ASM(x ## o ## suffix) \
+ DEF_ASM(x ## no ## suffix) \
+ DEF_ASM(x ## b ## suffix) \
+ DEF_ASM(x ## c ## suffix) \
+ DEF_ASM(x ## nae ## suffix) \
+ DEF_ASM(x ## nb ## suffix) \
+ DEF_ASM(x ## nc ## suffix) \
+ DEF_ASM(x ## ae ## suffix) \
+ DEF_ASM(x ## e ## suffix) \
+ DEF_ASM(x ## z ## suffix) \
+ DEF_ASM(x ## ne ## suffix) \
+ DEF_ASM(x ## nz ## suffix) \
+ DEF_ASM(x ## be ## suffix) \
+ DEF_ASM(x ## na ## suffix) \
+ DEF_ASM(x ## nbe ## suffix) \
+ DEF_ASM(x ## a ## suffix) \
+ DEF_ASM(x ## s ## suffix) \
+ DEF_ASM(x ## ns ## suffix) \
+ DEF_ASM(x ## p ## suffix) \
+ DEF_ASM(x ## pe ## suffix) \
+ DEF_ASM(x ## np ## suffix) \
+ DEF_ASM(x ## po ## suffix) \
+ DEF_ASM(x ## l ## suffix) \
+ DEF_ASM(x ## nge ## suffix) \
+ DEF_ASM(x ## nl ## suffix) \
+ DEF_ASM(x ## ge ## suffix) \
+ DEF_ASM(x ## le ## suffix) \
+ DEF_ASM(x ## ng ## suffix) \
+ DEF_ASM(x ## nle ## suffix) \
+ DEF_ASM(x ## g ## suffix)
+
+/* ------------------------------------------------------------------ */
 /* register */
  DEF_ASM(al)
  DEF_ASM(cl)
@@ -91,7 +167,16 @@
  DEF_ASM(fs)
  DEF_ASM(gs)
  DEF_ASM(st)
+ DEF_ASM(rip)
 
+#ifdef TCC_TARGET_X86_64
+ /* The four low parts of sp/bp/si/di that exist only on
+    x86-64 (encoding aliased to ah,ch,dh,dh when not using REX). */
+ DEF_ASM(spl)
+ DEF_ASM(bpl)
+ DEF_ASM(sil)
+ DEF_ASM(dil)
+#endif
  /* generic two operands */
  DEF_BWLX(mov)
 
@@ -126,12 +211,8 @@
  DEF_BWLX(shr)
  DEF_BWLX(sar)
 
- DEF_ASM(shldw)
- DEF_ASM(shldl)
- DEF_ASM(shld)
- DEF_ASM(shrdw)
- DEF_ASM(shrdl)
- DEF_ASM(shrd)
+ DEF_WLX(shld)
+ DEF_WLX(shrd)
 
  DEF_ASM(pushw)
  DEF_ASM(pushl)
@@ -150,12 +231,15 @@
  DEF_BWL(in)
  DEF_BWL(out)
 
- DEF_WL(movzb)
+ DEF_WLX(movzb)
  DEF_ASM(movzwl)
  DEF_ASM(movsbw)
  DEF_ASM(movsbl)
  DEF_ASM(movswl)
 #ifdef TCC_TARGET_X86_64
+ DEF_ASM(movsbq)
+ DEF_ASM(movswq)
+ DEF_ASM(movzwq)
  DEF_ASM(movslq)
 #endif
 
@@ -184,7 +268,11 @@
  DEF_WLX(bts)
  DEF_WLX(btr)
  DEF_WLX(btc)
+ DEF_WLX(popcnt)
+ DEF_WLX(tzcnt)
+ DEF_WLX(lzcnt)
 
+ DEF_WLX(lar)
  DEF_WLX(lsl)
 
  /* generic FP ops */

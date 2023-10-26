@@ -6,8 +6,14 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
+#include <assert.h>
 
 #include "libtcc.h"
+
+void handle_error(void *opaque, const char *msg)
+{
+    fprintf(opaque, "%s\n", msg);
+}
 
 /* this function is called by the generated code */
 int add(int a, int b)
@@ -15,9 +21,16 @@ int add(int a, int b)
     return a + b;
 }
 
+/* this strinc is referenced by the generated code */
+const char hello[] = "Hello World!";
+
 char my_program[] =
 "#include <tcclib.h>\n" /* include the "Simple libc header for TCC" */
 "extern int add(int a, int b);\n"
+"#ifdef _WIN32\n" /* dynamically linked data needs 'dllimport' */
+" __attribute__((dllimport))\n"
+"#endif\n"
+"extern const char hello[];\n"
 "int fib(int n)\n"
 "{\n"
 "    if (n <= 2)\n"
@@ -28,7 +41,7 @@ char my_program[] =
 "\n"
 "int foo(int n)\n"
 "{\n"
-"    printf(\"Hello World!\\n\");\n"
+"    printf(\"%s\\n\", hello);\n"
 "    printf(\"fib(%d) = %d\\n\", n, fib(n));\n"
 "    printf(\"add(%d, %d) = %d\\n\", n, 2 * n, add(n, 2 * n));\n"
 "    return 0;\n"
@@ -45,6 +58,14 @@ int main(int argc, char **argv)
         fprintf(stderr, "Could not create tcc state\n");
         exit(1);
     }
+
+    assert(tcc_get_error_func(s) == NULL);
+    assert(tcc_get_error_opaque(s) == NULL);
+
+    tcc_set_error_func(s, stderr, handle_error);
+
+    assert(tcc_get_error_func(s) == handle_error);
+    assert(tcc_get_error_opaque(s) == stderr);
 
     /* if tcclib.h and libtcc1.a are not installed, where can we find them */
     for (i = 1; i < argc; ++i) {
@@ -65,9 +86,10 @@ int main(int argc, char **argv)
     if (tcc_compile_string(s, my_program) == -1)
         return 1;
 
-    /* as a test, we add a symbol that the compiled program can use.
+    /* as a test, we add symbols that the compiled program can use.
        You may also open a dll with tcc_add_dll() and use symbols from that */
     tcc_add_symbol(s, "add", add);
+    tcc_add_symbol(s, "hello", hello);
 
     /* relocate the code */
     if (tcc_relocate(s, TCC_RELOCATE_AUTO) < 0)

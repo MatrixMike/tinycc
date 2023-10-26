@@ -2,41 +2,47 @@
 # credits: 01..13.c from the pcc cpp-tests suite
 #
 
-TCC = ../../tcc
-TESTS = $(patsubst %.c,%.test,$(wildcard *.c))
-TESTS += $(patsubst %.S,%.test,$(wildcard *.S))
+TOP = ../..
+include $(TOP)/Makefile
+SRC = $(TOPSRC)/tests/pp
+VPATH = $(SRC)
 
-all test : $(TESTS)
+files = $(patsubst %.$1,%.test,$(notdir $(wildcard $(SRC)/*.$1)))
+TESTS = $(call files,c) $(call files,S)
+
+all test testspp.all: $(sort $(TESTS))
+
+DIFF_OPTS = -Nu -b
+
+# Filter source directory in warnings/errors (out-of-tree builds)
+FILTER = 2>&1 | sed 's,$(SRC)/,,g'
 
 %.test: %.c %.expect
 	@echo PPTest $* ...
-	@$(TCC) -E -P $< >$*.output 2>&1 ; \
-	    diff -Nu -b -B -I "^#" $(EXTRA_DIFF_OPTS) $*.expect $*.output \
+	-@$(TCC) -E -P $< $(FILTER) >$*.output 2>&1 ; \
+	    diff $(DIFF_OPTS) $(SRC)/$*.expect $*.output \
 	    && rm -f $*.output
 
 %.test: %.S %.expect
 	@echo PPTest $* ...
-	@$(TCC) -E -P $< >$*.output 2>&1 ; \
-	    diff -Nu -b -B -I "^#" $(EXTRA_DIFF_OPTS) $*.expect $*.output \
+	-@$(TCC) -E -P $< $(FILTER) >$*.output 2>&1 ; \
+	    diff $(DIFF_OPTS) $(SRC)/$*.expect $*.output \
 	    && rm -f $*.output
 
-# automatically generate .expect files with gcc:
-%.expect: %.c
-	gcc -E -P $*.c >$*.expect 2>&1
+testspp.%: %.test ;
 
-%.expect: %.S
-	gcc -E -P $*.S >$*.expect 2>&1
+# automatically generate .expect files with gcc:
+%.expect: # %.c
+	gcc -E -P $*.[cS] >$*.expect 2>&1
 
 # tell make not to delete
 .PRECIOUS: %.expect
 
 clean:
-	rm -vf *.output
+	rm -f *.output
 
-# 02.test : EXTRA_DIFF_OPTS = -w
-# 03.test : EXTRA_DIFF_OPTS = -w
-# 04.test : EXTRA_DIFF_OPTS = -w
-# 10.test : EXTRA_DIFF_OPTS = -w
+02.test : DIFF_OPTS += -w
+# 15.test : DIFF_OPTS += -I"^XXX:"
 
 # diff options:
 # -b ighore space changes

@@ -4,125 +4,91 @@
 
 TOP = ..
 include $(TOP)/Makefile
-VPATH = $(top_srcdir)/lib $(top_srcdir)/win32/lib
+VPATH = $(TOPSRC)/lib $(TOPSRC)/win32/lib
+T = $(or $(CROSS_TARGET),$(NATIVE_TARGET),unknown)
+X = $(if $(CROSS_TARGET),$(CROSS_TARGET)-)
 
-ifndef TARGET # native library
- ifdef CONFIG_WIN64
-  TARGET = x86_64-win
- else
- ifdef CONFIG_WIN32
-  TARGET = i386-win
- else
- ifeq ($(ARCH),i386)
-  TARGET = i386
- else
- ifeq ($(ARCH),x86-64)
-  TARGET = x86_64
- else
- ifeq ($(ARCH),arm)
-  TARGET = arm
-  XCC = $(CC)
- else
- ifeq ($(ARCH),arm64)
-  TARGET = arm64
- else
- endif
- endif
- endif
- endif
- endif
- endif
+XTCC ?= $(TOP)/$(X)tcc$(EXESUF)
+XCC = $(XTCC)
+XAR = $(XTCC) -ar
+XFLAGS-unx = -B$(TOPSRC)
+XFLAGS-win = -B$(TOPSRC)/win32 -I$(TOPSRC)/include
+XFLAGS = $(XFLAGS$(XCFG)) -I$(TOP)
+XCFG = $(or $(findstring -win,$T),-unx)
+S = $(if $(findstring yes,$(SILENT)),@$(info * $@))
+
+# in order to use gcc, type: make <target>-libtcc1-usegcc=yes
+arm-libtcc1-usegcc ?= no
+
+# This makes bounds checking 40%..60% faster.
+#x86_64-libtcc1-usegcc=yes
+#i386-libtcc1-usegcc=yes
+
+ifeq "$($(T)-libtcc1-usegcc)" "yes"
+ XCC = $(CC)
+ XAR = $(AR)
+ XFLAGS = $(CFLAGS) -fPIC -gdwarf -fno-omit-frame-pointer -Wno-unused-function -Wno-unused-variable
 endif
 
-BCHECK_O = bcheck.o
-DIR = $(TARGET)
-
-native : ../libtcc1.a
-cross : $(DIR)/libtcc1.a
-
-native : TCC = $(TOP)/tcc$(EXESUF)
-cross : TCC = $(TOP)/$(TARGET)-tcc$(EXESUF)
-
-I386_O = libtcc1.o alloca86.o alloca86-bt.o $(BCHECK_O)
-X86_64_O = libtcc1.o alloca86_64.o alloca86_64-bt.o $(BCHECK_O)
-ARM_O = libtcc1.o armeabi.o alloca-arm.o
-WIN32_O = $(I386_O) crt1.o wincrt1.o dllcrt1.o dllmain.o chkstk.o
-WIN64_O = $(X86_64_O) crt1.o wincrt1.o dllcrt1.o dllmain.o chkstk.o
-ARM64_O = lib-arm64.o
-
-# build TCC runtime library to contain PIC code, so it can be linked
-# into shared libraries
-PICFLAGS = -fPIC
-
-# don't compile with -fstack-protector-strong, TCC doesn't handle it
-# correctly
-CFLAGS := $(filter-out -fstack-protector-strong,$(CFLAGS))
-
-ifeq "$(TARGET)" "i386-win"
- OBJ = $(addprefix $(DIR)/,$(WIN32_O))
- TGT = -DTCC_TARGET_I386 -DTCC_TARGET_PE
- XCC ?= $(TCC) -B$(top_srcdir)/win32 -I$(top_srcdir)/include
- XAR ?= $(DIR)/tiny_libmaker$(EXESUF)
- PICFLAGS =
-else
-ifeq "$(TARGET)" "x86_64-win"
- OBJ = $(addprefix $(DIR)/,$(WIN64_O))
- TGT = -DTCC_TARGET_X86_64 -DTCC_TARGET_PE
- XCC = $(TCC) -B$(top_srcdir)/win32 -I$(top_srcdir)/include
- XAR ?= $(DIR)/tiny_libmaker$(EXESUF)
- PICFLAGS =
-else
-ifeq "$(TARGET)" "i386"
- OBJ = $(addprefix $(DIR)/,$(I386_O))
- TGT = -DTCC_TARGET_I386
- XCC ?= $(TCC) -B$(TOP)
-else
-ifeq "$(TARGET)" "x86_64"
- OBJ = $(addprefix $(DIR)/,$(X86_64_O))
- TGT = -DTCC_TARGET_X86_64
- XCC ?= $(TCC) -B$(TOP)
-else
-ifeq "$(TARGET)" "arm"
- OBJ = $(addprefix $(DIR)/,$(ARM_O))
- TGT = -DTCC_TARGET_ARM
- XCC ?= $(TCC) -B$(TOP)
-else
-ifeq "$(TARGET)" "arm64"
- OBJ = $(addprefix $(DIR)/,$(ARM64_O))
- TGT = -DTCC_TARGET_ARM64
- XCC ?= $(TCC) -B$(TOP)
-else
- $(error libtcc1.a not supported on target '$(TARGET)')
+ifneq ($(CONFIG_backtrace),no)
+# only for native compiler
+ifneq ($(CONFIG_bcheck),no)
+$(X)BCHECK_O = bcheck.o
 endif
+$(X)BT_O = bt-exe.o bt-log.o
+$(X)B_O = $(BCHECK_O) bt-exe.o bt-log.o bt-dll.o
 endif
-endif
-endif
-endif
-endif
+$(X)BT_O += tcov.o
 
-XFLAGS = $(filter-out -b,$(CPPFLAGS) $(CFLAGS) $(PICFLAGS) $(TGT))
+DSO_O = dsohandle.o
 
-ifeq ($(TARGETOS),Darwin)
- XAR = $(DIR)/tiny_libmaker$(EXESUF)
- XFLAGS += -D_ANSI_SOURCE
- BCHECK_O =
-endif
+I386_O = libtcc1.o alloca.o alloca-bt.o stdatomic.o atomic.o builtin.o $(BT_O)
+X86_64_O = libtcc1.o alloca.o alloca-bt.o stdatomic.o atomic.o builtin.o $(BT_O)
+ARM_O = libtcc1.o armeabi.o alloca.o armflush.o stdatomic.o atomic.o builtin.o $(BT_O)
+ARM64_O = lib-arm64.o stdatomic.o atomic.o builtin.o $(BT_O)
+RISCV64_O = lib-arm64.o stdatomic.o atomic.o builtin.o $(BT_O)
+WIN_O = crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o
 
-XAR ?= $(AR)
+OBJ-i386 = $(I386_O) $(BCHECK_O) $(DSO_O)
+OBJ-x86_64 = $(X86_64_O) va_list.o $(BCHECK_O) $(DSO_O)
+OBJ-x86_64-osx = $(X86_64_O) va_list.o $(BCHECK_O)
+OBJ-i386-win32 = $(I386_O) chkstk.o $(B_O) $(WIN_O)
+OBJ-x86_64-win32 = $(X86_64_O) chkstk.o $(B_O) $(WIN_O)
+OBJ-arm64 = $(ARM64_O) $(BCHECK_O) $(DSO_O)
+OBJ-arm64-osx = $(ARM64_O) $(BCHECK_O)
+OBJ-arm = $(ARM_O) $(BCHECK_O) $(DSO_O)
+OBJ-arm-fpa = $(ARM_O) $(DSO_O)
+OBJ-arm-fpa-ld = $(ARM_O) $(DSO_O)
+OBJ-arm-vfp = $(ARM_O) $(DSO_O)
+OBJ-arm-eabi = $(ARM_O) $(DSO_O)
+OBJ-arm-eabihf = $(ARM_O) $(DSO_O)
+OBJ-arm-wince = $(ARM_O) $(WIN_O)
+OBJ-riscv64 = $(RISCV64_O) $(BCHECK_O) $(DSO_O)
 
-$(DIR)/libtcc1.a ../libtcc1.a : $(OBJ) $(XAR)
-	$(XAR) rcs $@ $(OBJ)
-$(DIR)/%.o : %.c
-	$(XCC) -c $< -o $@ $(XFLAGS)
-$(DIR)/%.o : %.S
-	$(XCC) -c $< -o $@ $(XFLAGS)
-$(DIR)/%$(EXESUF) : $(TOP)/win32/tools/%.c
-	$(CC) -o $@ $< $(XFLAGS) $(LDFLAGS)
+OBJ-extra = $(filter $(B_O),$(OBJ-$T))
+OBJ-libtcc1 = $(addprefix $(X),$(filter-out $(OBJ-extra),$(OBJ-$T)))
 
-$(OBJ) $(XAR) : $(DIR)/exists
-$(DIR)/exists :
-	mkdir -p $(DIR)
-	@echo $@ > $@
+ALL = $(addprefix $(TOP)/,$(X)libtcc1.a $(OBJ-extra))
+
+all: $(ALL)
+
+$(TOP)/$(X)libtcc1.a : $(OBJ-libtcc1)
+	$S$(XAR) rcs $@ $^
+
+$(X)%.o : %.c
+	$S$(XCC) -c $< -o $@ $(XFLAGS)
+
+$(X)%.o : %.S
+	$S$(XCC) -c $< -o $@ $(XFLAGS)
+
+$(TOP)/%.o : %.c
+	$S$(XCC) -c $< -o $@ $(XFLAGS)
+
+$(TOP)/bcheck.o : XFLAGS += -bt $(if $(CONFIG_musl),-DTCC_MUSL)
+$(TOP)/bt-exe.o : $(TOP)/tccrun.c
+
+$(X)crt1w.o : crt1.c
+$(X)wincrt1w.o : wincrt1.c
 
 clean :
-	rm -rfv i386-win x86_64-win i386 x86_64 arm64
+	rm -f *.a *.o $(ALL)

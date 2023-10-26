@@ -1,8 +1,9 @@
 // =============================================
 // crt1.c
 
-// For ExitProcess
-// windows.h header file should be included before any other library include
+// _UNICODE for tchar.h, UNICODE for API
+#include <tchar.h>
+
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -16,71 +17,79 @@
 #define _PC_53          0x00010000 // 53 bits
 #define _PC_64          0x00000000 // 64 bits
 
-#ifndef __TRY__
-    #ifdef _WIN64
-	#define __TRY__
-    #else
-	#define __TRY__ void __try__(void**), *_sehrec[6]; __try__(_sehrec);
-    #endif
+#ifdef _UNICODE
+#define __tgetmainargs __wgetmainargs
+#define _tstart _wstart
+#define _tmain wmain
+#define _runtmain _runwmain
+#else
+#define __tgetmainargs __getmainargs
+#define _tstart _start
+#define _tmain main
+#define _runtmain _runmain
 #endif
 
-typedef struct
-{
-    int newmode;
-} _startupinfo;
-
-// Prototype of __getmainargs:
-// in msvcrt v6.x : returns void (windows 98, 2000)
-// in msvcrt v7.x : returns int  (windows xp and above)
-// Using the last for check the result. A negative value means no success.
-// These are the test results of call to __getmainargs with the heap fully:
-// win 98, 2000 :
-//     program termination with error code 255 after call _amsg_exit(8)
-//     prints: "runtime error R6008\r\n- not enough space for arguments\r\n"
-// win xp :
-//     returns -1
-// win 7, 8 :
-//     program termination with error code -1 after call ExitProcess(-1)
-//
-// Checking the return of this function also works on windows 98 and 2000
-// because internally it sets to eax the value of the third parameter.
-// In this case is &env and at that point it is not a negative value.
-
-int __cdecl __getmainargs(int *pargc, char ***pargv, char ***penv, int globb, _startupinfo*);
+typedef struct { int newmode; } _startupinfo;
+int __cdecl __tgetmainargs(int *pargc, _TCHAR ***pargv, _TCHAR ***penv, int globb, _startupinfo*);
 void __cdecl __set_app_type(int apptype);
 unsigned int __cdecl _controlfp(unsigned int new_value, unsigned int mask);
+extern int _tmain(int argc, _TCHAR * argv[], _TCHAR * env[]);
 
-void _start(void);
-int main(int argc, char * argv[], char * env[]);
+#include "crtinit.c"
 
-void _start(void)
+static int do_main (int argc, _TCHAR * argv[], _TCHAR * env[])
 {
-    __TRY__
-    int argc;
-    char **argv;
-    char **env;
-    _startupinfo start_info;
+    int retval;
+    run_ctors(argc, argv, env);
+    retval = _tmain(__argc, __targv, _tenviron);
+    run_dtors();
+    return retval;
+}
 
+/* Allow command-line globbing with "int _dowildcard = 1;" in the user source */
+int _dowildcard;
+
+static LONG WINAPI catch_sig(EXCEPTION_POINTERS *ex)
+{
+  return _XcptFilter(ex->ExceptionRecord->ExceptionCode, ex);
+}
+
+void _tstart(void)
+{
+    _startupinfo start_info = {0};
+    SetUnhandledExceptionFilter(catch_sig);
     // Sets the current application type
     __set_app_type(_CONSOLE_APP);
 
     // Set default FP precision to 53 bits (8-byte double)
-    // _MCW_PC (Precision control) is not supported on
-    // the ARM and x64 architectures
-#if defined(_X86_) && !defined(__x86_64)
+    // _MCW_PC (Precision control) is not supported on ARM
+#if defined __i386__ || defined __x86_64__
     _controlfp(_PC_53, _MCW_PC);
 #endif
 
-    start_info.newmode = 0;
-    if ( __getmainargs( &argc, &argv, &env, 0, &start_info ) < 0 )
-    {
-        ExitProcess(-1);
-    }
-    else
-    {
-        exit( main(argc, argv, env) );
-    }
+    __tgetmainargs( &__argc, &__targv, &_tenviron, _dowildcard, &start_info);
+    exit(do_main(__argc, __targv, _tenviron));
+}
 
+int _runtmain(int argc, /* as tcc passed in */ char **argv)
+{
+#ifdef UNICODE
+    _startupinfo start_info = {0};
+
+    __tgetmainargs(&__argc, &__targv, &_tenviron, _dowildcard, &start_info);
+    /* may be wrong when tcc has received wildcards (*.c) */
+    if (argc < __argc) {
+        __targv += __argc - argc;
+        __argc = argc;
+    }
+#else
+    __argc = argc;
+    __targv = argv;
+#endif
+#if defined __i386__ || defined __x86_64__
+    _controlfp(_PC_53, _MCW_PC);
+#endif
+    return _tmain(__argc, __targv, _tenviron);
 }
 
 // =============================================

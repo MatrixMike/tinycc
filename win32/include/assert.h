@@ -39,16 +39,24 @@ __CRT_INLINE __MINGW_ATTRIB_NORETURN void __cdecl _Exit(int status)
 extern "C" {
 #endif
 
+
 extern void __cdecl _wassert(const wchar_t *_Message,const wchar_t *_File,unsigned _Line);
+extern void __cdecl _assert(const char *, const char *, unsigned);
 
 #ifdef __cplusplus
 }
 #endif
 
 #ifndef assert
-#define assert(_Expression) (void)((!!(_Expression)) || (_wassert(_CRT_WIDE(#_Expression),_CRT_WIDE(__FILE__),__LINE__),0))
+//#define assert(_Expression) (void)((!!(_Expression)) || (_wassert(_CRT_WIDE(#_Expression),_CRT_WIDE(__FILE__),__LINE__),0))
+#define assert(e) ((e) ? (void)0 : _assert(#e, __FILE__, __LINE__))
 #endif
 
+#endif
+
+#if (__STDC_VERSION__ >= 201112L) && !defined(static_assert)
+/* C11, section 7.2: The macro static_assert expands to _Static_assert. */
+#define static_assert(exp, str) _Static_assert(exp, str) 
 #endif
 
 #endif

@@ -28,8 +28,6 @@ the Free Software Foundation, 59 Temple Place - Suite 330,
 Boston, MA 02111-1307, USA.  
 */
 
-#include <stdint.h>
-
 #define W_TYPE_SIZE   32
 #define BITS_PER_UNIT 8
 
@@ -109,10 +107,10 @@ union float_long {
 };
 
 /* XXX: we don't support several builtin supports for now */
-#if !defined(TCC_TARGET_X86_64) && !defined(TCC_TARGET_ARM)
+#if !defined __x86_64__ && !defined __arm__
 
 /* XXX: use gcc/tcc intrinsic ? */
-#if defined(TCC_TARGET_I386)
+#if defined __i386__
 #define sub_ddmmss(sh, sl, ah, al, bh, bl) \
   __asm__ ("subl %5,%1\n\tsbbl %3,%0"					\
 	   : "=r" ((USItype) (sh)),					\
@@ -480,20 +478,6 @@ long long __ashldi3(long long a, int b)
 #endif
 }
 
-#ifndef COMMIT_4ad186c5ef61_IS_FIXED
-long long __tcc_cvt_ftol(long double x)
-{
-    unsigned c0, c1;
-    long long ret;
-    __asm__ __volatile__ ("fnstcw %0" : "=m" (c0));
-    c1 = c0 | 0x0C00;
-    __asm__ __volatile__ ("fldcw %0" : : "m" (c1));
-    __asm__ __volatile__ ("fistpll %0"  : "=m" (ret));
-    __asm__ __volatile__ ("fldcw %0" : : "m" (c0));
-    return ret;
-}
-#endif
-
 #endif /* !__x86_64__ */
 
 /* XXX: fix tcc's code generator to do this instead */
@@ -546,7 +530,7 @@ unsigned long long __fixunssfdi (float a1)
 {
     register union float_long fl1;
     register int exp;
-    register unsigned long l;
+    register unsigned long long l;
 
     fl1.f = a1;
 
@@ -554,16 +538,26 @@ unsigned long long __fixunssfdi (float a1)
 	return (0);
 
     exp = EXP (fl1.l) - EXCESS - 24;
-
     l = MANT(fl1.l);
+
     if (exp >= 41)
-	return (unsigned long long)-1;
+        return 1ULL << 63;
     else if (exp >= 0)
-        return (unsigned long long)l << exp;
+        l <<= exp;
     else if (exp >= -23)
-        return l >> -exp;
+        l >>= -exp;
     else
-        return 0;
+	return 0;
+    if (SIGN(fl1.l))
+        l = (unsigned long long)-l;
+    return l;
+}
+
+long long __fixsfdi (float a1)
+{
+    long long ret; int s;
+    ret = __fixunssfdi((s = a1 >= 0) ? a1 : -a1);
+    return s ? ret : -ret;
 }
 
 unsigned long long __fixunsdfdi (double a1)
@@ -578,19 +572,29 @@ unsigned long long __fixunsdfdi (double a1)
 	return (0);
 
     exp = EXPD (dl1) - EXCESSD - 53;
-
     l = MANTD_LL(dl1);
 
     if (exp >= 12)
-	return (unsigned long long)-1;
+        return 1ULL << 63; /* overflow result (like gcc, somewhat) */
     else if (exp >= 0)
-        return l << exp;
+        l <<= exp;
     else if (exp >= -52)
-        return l >> -exp;
+        l >>= -exp;
     else
         return 0;
+    if (SIGND(dl1))
+        l = (unsigned long long)-l;
+    return l;
 }
 
+long long __fixdfdi (double a1)
+{
+    long long ret; int s;
+    ret = __fixunsdfdi((s = a1 >= 0) ? a1 : -a1);
+    return s ? ret : -ret;
+}
+
+#ifndef __arm__
 unsigned long long __fixunsxfdi (long double a1)
 {
     register union ldouble_long dl1;
@@ -603,29 +607,15 @@ unsigned long long __fixunsxfdi (long double a1)
 	return (0);
 
     exp = EXPLD (dl1) - EXCESSLD - 64;
-
     l = dl1.l.lower;
-
     if (exp > 0)
-	return (unsigned long long)-1;
-    else if (exp >= -63) 
-        return l >> -exp;
-    else
+	return 1ULL << 63;
+    if (exp < -63)
         return 0;
-}
-
-long long __fixsfdi (float a1)
-{
-    long long ret; int s;
-    ret = __fixunssfdi((s = a1 >= 0) ? a1 : -a1);
-    return s ? ret : -ret;
-}
-
-long long __fixdfdi (double a1)
-{
-    long long ret; int s;
-    ret = __fixunsdfdi((s = a1 >= 0) ? a1 : -a1);
-    return s ? ret : -ret;
+    l >>= -exp;
+    if (SIGNLD(dl1))
+        l = (unsigned long long)-l;
+    return l;
 }
 
 long long __fixxfdi (long double a1)
@@ -634,120 +624,18 @@ long long __fixxfdi (long double a1)
     ret = __fixunsxfdi((s = a1 >= 0) ? a1 : -a1);
     return s ? ret : -ret;
 }
+#endif /* !ARM */
 
-#if defined(TCC_TARGET_X86_64) && !defined(_WIN64)
-
-#ifndef __TINYC__
-#include <stdlib.h>
-#include <stdio.h>
-#include <string.h>
-#else
-/* Avoid including stdlib.h because it is not easily available when
-   cross compiling */
-#include <stddef.h> /* size_t definition is needed for a x86_64-tcc to parse memset() */
-extern void *malloc(unsigned long long);
-extern void *memset(void *s, int c, size_t n);
-extern void free(void*);
-extern void abort(void);
+#if defined __x86_64__
+/* float constants used for unary minus operation */
+const float __mzerosf = -0.0;
+const double __mzerodf = -0.0;
 #endif
 
-enum __va_arg_type {
-    __va_gen_reg, __va_float_reg, __va_stack
-};
-
-//This should be in sync with the declaration on our include/stdarg.h
-/* GCC compatible definition of va_list. */
-typedef struct {
-    unsigned int gp_offset;
-    unsigned int fp_offset;
-    union {
-        unsigned int overflow_offset;
-        char *overflow_arg_area;
-    };
-    char *reg_save_area;
-} __va_list_struct;
-
-#undef __va_start
-#undef __va_arg
-#undef __va_copy
-#undef __va_end
-
-void __va_start(__va_list_struct *ap, void *fp)
+#if defined _WIN64
+/* MSVC x64 intrinsic */
+void __faststorefence(void)
 {
-    memset(ap, 0, sizeof(__va_list_struct));
-    *ap = *(__va_list_struct *)((char *)fp - 16);
-    ap->overflow_arg_area = (char *)fp + ap->overflow_offset;
-    ap->reg_save_area = (char *)fp - 176 - 16;
+    __asm__("lock; orl $0,(%rsp)");
 }
-
-void *__va_arg(__va_list_struct *ap,
-               enum __va_arg_type arg_type,
-               int size, int align)
-{
-    size = (size + 7) & ~7;
-    align = (align + 7) & ~7;
-    switch (arg_type) {
-    case __va_gen_reg:
-        if (ap->gp_offset + size <= 48) {
-            ap->gp_offset += size;
-            return ap->reg_save_area + ap->gp_offset - size;
-        }
-        goto use_overflow_area;
-
-    case __va_float_reg:
-        if (ap->fp_offset < 128 + 48) {
-            ap->fp_offset += 16;
-            return ap->reg_save_area + ap->fp_offset - 16;
-        }
-        size = 8;
-        goto use_overflow_area;
-
-    case __va_stack:
-    use_overflow_area:
-        ap->overflow_arg_area += size;
-        ap->overflow_arg_area = (char*)((intptr_t)(ap->overflow_arg_area + align - 1) & -(intptr_t)align);
-        return ap->overflow_arg_area - size;
-
-    default:
-#ifndef __TINYC__
-        fprintf(stderr, "unknown ABI type for __va_arg\n");
-#endif
-        abort();
-    }
-}
-
-#endif /* __x86_64__ */
-
-/* Flushing for tccrun */
-#if defined(TCC_TARGET_X86_64) || defined(TCC_TARGET_I386)
-
-void __clear_cache(void *beginning, void *end)
-{
-}
-
-#elif defined(TCC_TARGET_ARM)
-
-#define _GNU_SOURCE
-#include <unistd.h>
-#include <sys/syscall.h>
-#include <stdio.h>
-
-void __clear_cache(void *beginning, void *end)
-{
-/* __ARM_NR_cacheflush is kernel private and should not be used in user space.
- * However, there is no ARM asm parser in tcc so we use it for now */
-#if 1
-    syscall(__ARM_NR_cacheflush, beginning, end, 0);
-#else
-    __asm__ ("push {r7}\n\t"
-             "mov r7, #0xf0002\n\t"
-             "mov r2, #0\n\t"
-             "swi 0\n\t"
-             "pop {r7}\n\t"
-             "ret");
-#endif
-}
-
-#else
-#warning __clear_cache not defined for this architecture, avoid using tcc -run
 #endif
