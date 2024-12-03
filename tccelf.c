@@ -51,7 +51,7 @@ struct sym_version {
 #define shf_RELRO SHF_ALLOC
 static const char rdata[] = ".rdata";
 #else
-#define shf_RELRO s1->shf_RELRO
+#define shf_RELRO SHF_ALLOC /* eventually made SHF_WRITE in sort_sections() */
 static const char rdata[] = ".data.ro";
 #endif
 
@@ -60,12 +60,6 @@ static const char rdata[] = ".data.ro";
 ST_FUNC void tccelf_new(TCCState *s)
 {
     TCCState *s1 = s;
-
-#ifndef TCC_TARGET_PE
-    shf_RELRO = SHF_ALLOC;
-    if (s1->output_type != TCC_OUTPUT_MEMORY)
-        shf_RELRO |= SHF_WRITE; /* the ELF loader will set it to RO at runtime */
-#endif
 
     /* no section zero */
     dynarray_add(&s->sections, &s->nb_sections, NULL);
@@ -95,6 +89,12 @@ ST_FUNC void tccelf_new(TCCState *s)
         tcc_debug_new(s);
     }
 
+#if TCC_EH_FRAME
+    if (s->output_format != TCC_OUTPUT_FORMAT_ELF)
+        s->unwind_tables = 0;
+    tcc_eh_frame_start(s);
+#endif
+
 #ifdef CONFIG_TCC_BCHECK
     if (s->do_bounds_check) {
         /* if bound checking, then add corresponding sections */
@@ -102,6 +102,13 @@ ST_FUNC void tccelf_new(TCCState *s)
         bounds_section = new_section(s, ".bounds", SHT_PROGBITS, shf_RELRO);
         lbounds_section = new_section(s, ".lbounds", SHT_PROGBITS, shf_RELRO);
     }
+#endif
+
+#ifdef TCC_TARGET_PE
+    /* to make sure that -ltcc1 -Wl,-e,_start will grab the startup code
+       from libtcc1.a (unless _start defined) */
+    if (s->elf_entryname)
+        set_global_sym(s, s->elf_entryname, NULL, 0); /* SHN_UNDEF */
 #endif
 }
 
@@ -1124,8 +1131,8 @@ static void relocate_section(TCCState *s1, Section *s, Section *sr)
                 r = 0; /* cannot apply 64bit relocation to 32bit value */
             sr->data_offset = sr->sh_size = r;
 #ifdef CONFIG_TCC_PIE
-            if (r && 0 == (s->sh_flags & SHF_WRITE))
-                tcc_warning("%d relocations to ro-section %s", (unsigned)(r / sizeof *qrel), s->name);
+            if (r && (s->sh_flags & SHF_EXECINSTR))
+                tcc_warning("%d relocations to %s", (unsigned)(r / sizeof *qrel), s->name);
 #endif
         }
     }
@@ -1756,7 +1763,7 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
         if (s1->do_bounds_check && s1->output_type != TCC_OUTPUT_DLL) {
             tcc_add_support(s1, "bcheck.o");
 # if !(TARGETOS_OpenBSD || TARGETOS_NetBSD)
-            tcc_add_library_err(s1, "dl");
+            tcc_add_library(s1, "dl");
 # endif
             lpthread = 1;
         }
@@ -1772,8 +1779,8 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
         }
 #endif
         if (lpthread)
-            tcc_add_library_err(s1, "pthread");
-        tcc_add_library_err(s1, "c");
+            tcc_add_library(s1, "pthread");
+        tcc_add_library(s1, "c");
 #ifdef TCC_LIBGCC
         if (!s1->static_link) {
             if (TCC_LIBGCC[0] == '/')
@@ -1783,7 +1790,7 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
         }
 #endif
 #if defined TCC_TARGET_ARM && TARGETOS_FreeBSD
-        tcc_add_library_err(s1, "gcc_s"); // unwind code
+        tcc_add_library(s1, "gcc_s"); // unwind code
 #endif
         if (TCC_LIBTCC1[0])
             tcc_add_support(s1, TCC_LIBTCC1);
@@ -2089,7 +2096,7 @@ static int set_sec_sizes(TCCState *s1)
                     /* allocate the section */
                     s->sh_flags |= SHF_ALLOC;
                     s->sh_size = count * sizeof(ElfW_Rel);
-                    if (!(s1->sections[s->sh_info]->sh_flags & SHF_WRITE))
+                    if (s1->sections[s->sh_info]->sh_flags & SHF_EXECINSTR)
                         textrel += count;
                 }
             }
@@ -2159,47 +2166,56 @@ static int sort_sections(TCCState *s1, int *sec_order, struct dyn_inf *d)
         } else {
             j = 0x700;
         }
+        if (j >= 0x700 && s1->output_format != TCC_OUTPUT_FORMAT_ELF)
+            s->sh_size = 0, j = 0x900;
+
         if (s->sh_type == SHT_SYMTAB || s->sh_type == SHT_DYNSYM) {
             k = 0x10;
         } else if (s->sh_type == SHT_STRTAB && strcmp(s->name, ".stabstr")) {
             k = 0x11;
-            if (i == nb_sections - 1) /* ".shstrtab" assumed to remain last */
+            if (i == nb_sections - 1) /* ".shstrtab" assumed to stay last */
                 k = 0xff;
         } else if (s->sh_type == SHT_HASH || s->sh_type == SHT_GNU_HASH) {
             k = 0x12;
+        } else if (s->sh_type == SHT_GNU_verdef
+                  || s->sh_type == SHT_GNU_verneed
+                  || s->sh_type == SHT_GNU_versym) {
+            k = 0x13;
         } else if (s->sh_type == SHT_RELX) {
             k = 0x20;
             if (s1->plt && s == s1->plt->reloc)
                 k = 0x21;
+        } else if (s->sh_flags & SHF_EXECINSTR) {
+            k = 0x30;
+        /* RELRO sections --> */
         } else if (s->sh_type == SHT_PREINIT_ARRAY) {
             k = 0x41;
         } else if (s->sh_type == SHT_INIT_ARRAY) {
             k = 0x42;
         } else if (s->sh_type == SHT_FINI_ARRAY) {
             k = 0x43;
-#ifdef CONFIG_TCC_BCHECK
-        } else if (s == bounds_section || s == lbounds_section) {
-            k = 0x44;
-#endif
-        } else if (s == rodata_section || 0 == strcmp(s->name, ".data.rel.ro")) {
-            k = 0x45;
         } else if (s->sh_type == SHT_DYNAMIC) {
             k = 0x46;
         } else if (s == s1->got) {
             k = 0x47; /* .got as RELRO needs BIND_NOW in DT_FLAGS */
+        } else if (s->reloc && (s->reloc->sh_flags & SHF_ALLOC) && j == 0x100) {
+            k = 0x44;
+        /* <-- */
+        } else if (s->sh_type == SHT_NOTE) {
+            k = 0x60;
+        } else if (s->sh_type == SHT_NOBITS) {
+            k = 0x70; /* bss */
+        } else if (s == d->interp) {
+            k = 0x00;
         } else {
-            k = 0x50;
-            if (s->sh_type == SHT_NOTE)
-                k = 0x60;
-            if (s->sh_flags & SHF_EXECINSTR)
-                k = 0x70;
-            if (s->sh_type == SHT_NOBITS)
-                k = 0x80;
-            if (s == d->interp)
-                k = 0x00;
+            k = 0x50; /* data */
         }
         k += j;
 
+        if ((k & 0xfff0) == 0x140) {
+            /* make RELRO section writable */
+            k += 0x100, s->sh_flags |= SHF_WRITE;
+        }
         for (n = i; n > 1 && k < (f = sec_cls[n - 1]); --n)
             sec_cls[n] = f, sec_order[n] = sec_order[n - 1];
         sec_cls[n] = k, sec_order[n] = i;
@@ -2231,7 +2247,7 @@ static int sort_sections(TCCState *s1, int *sec_order, struct dyn_inf *d)
                 f0 = f, ++n, f |= 1<<8;
         }
         sec_cls[i] = f;
-        //printf("ph %d sec %02d : %3X %3X  %8.2X  %04X  %s\n", (f>0) * n, i, f, k, s->sh_type, s->sh_size, s->name);
+        //printf("ph %d sec %02d : %3X %3X  %8.2X  %04X  %s\n", (f>0) * n, i, f, k, s->sh_type, (int)s->sh_size, s->name);
     }
     return n;
 }
@@ -2270,6 +2286,8 @@ static int layout_sections(TCCState *s1, int *sec_order, struct dyn_inf *d)
     if (d->note)
         ++phnum;
     if (d->dynamic)
+        ++phnum;
+    if (eh_frame_hdr_section)
         ++phnum;
     if (d->roinf)
         ++phnum;
@@ -2391,6 +2409,8 @@ static int layout_sections(TCCState *s1, int *sec_order, struct dyn_inf *d)
         fill_phdr(++ph, PT_NOTE, d->note);
     if (d->dynamic)
         fill_phdr(++ph, PT_DYNAMIC, d->dynamic)->p_flags |= PF_W;
+    if (eh_frame_hdr_section)
+        fill_phdr(++ph, PT_GNU_EH_FRAME, eh_frame_hdr_section);
     if (d->roinf)
         fill_phdr(++ph, PT_GNU_RELRO, d->roinf)->p_flags |= PF_W;
     if (d->interp)
@@ -2859,6 +2879,10 @@ static int elf_output_file(TCCState *s1, const char *filename)
                 /* shared library case: simply export all global symbols */
                 export_global_syms(s1);
             }
+#if TCC_EH_FRAME
+	    /* fill with initial data */
+	    tcc_eh_frame_hdr(s1, 0);
+#endif
 	    dyninf.gnu_hash = create_gnu_hash(s1);
         } else {
             build_got_entries(s1, 0);
@@ -2942,7 +2966,10 @@ static int elf_output_file(TCCState *s1, const char *filename)
         update_gnu_hash(s1, dyninf.gnu_hash);
 
     reorder_sections(s1, sec_order);
-
+#if TCC_EH_FRAME
+    /* fill with final data */
+    tcc_eh_frame_hdr(s1, 1);
+#endif
     /* Create the ELF file with name 'filename' */
     ret = tcc_write_elf_file(s1, filename, dyninf.phnum, dyninf.phdr);
  the_end:
@@ -3000,7 +3027,7 @@ LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
         return elf_output_obj(s, filename);
 #ifdef TCC_TARGET_PE
     return  pe_output_file(s, filename);
-#elif TCC_TARGET_MACHO
+#elif defined TCC_TARGET_MACHO
     return macho_output_file(s, filename);
 #else
     return elf_output_file(s, filename);
@@ -3129,23 +3156,26 @@ invalid:
 	if (sh->sh_type == SHT_RELX)
 	  sh = &shdr[sh->sh_info];
         /* ignore sections types we do not handle (plus relocs to those) */
+        sh_name = strsec + sh->sh_name;
+        if (0 == strncmp(sh_name, ".debug_", 7)
+         || 0 == strncmp(sh_name, ".stab", 5)) {
+	    if (!s1->do_debug || seencompressed)
+	        continue;
+        } else if (0 == strncmp(sh_name, ".eh_frame", 9)) {
+            if (NULL == eh_frame_section)
+                continue;
+        } else
         if (sh->sh_type != SHT_PROGBITS &&
-#ifdef TCC_ARM_EABI
-            sh->sh_type != SHT_ARM_EXIDX &&
-#endif
-#if TARGETOS_OpenBSD || TARGETOS_FreeBSD || TARGETOS_NetBSD
-            sh->sh_type != SHT_X86_64_UNWIND &&
-#endif
             sh->sh_type != SHT_NOTE &&
             sh->sh_type != SHT_NOBITS &&
             sh->sh_type != SHT_PREINIT_ARRAY &&
             sh->sh_type != SHT_INIT_ARRAY &&
-            sh->sh_type != SHT_FINI_ARRAY &&
-            strcmp(strsec + sh->sh_name, ".stabstr")
+            sh->sh_type != SHT_FINI_ARRAY
+#ifdef TCC_ARM_EABI
+            && sh->sh_type != SHT_ARM_EXIDX
+#endif
             )
             continue;
-	if (seencompressed && 0 == strncmp(strsec + sh->sh_name, ".debug_", 7))
-	  continue;
 
 	sh = &shdr[i];
         sh_name = strsec + sh->sh_name;
@@ -3154,24 +3184,29 @@ invalid:
         /* find corresponding section, if any */
         for(j = 1; j < s1->nb_sections;j++) {
             s = s1->sections[j];
-            if (!strcmp(s->name, sh_name)) {
-                if (!strncmp(sh_name, ".gnu.linkonce",
-                             sizeof(".gnu.linkonce") - 1)) {
-                    /* if a 'linkonce' section is already present, we
-                       do not add it again. It is a little tricky as
-                       symbols can still be defined in
-                       it. */
-                    sm_table[i].link_once = 1;
-                    goto next;
-                }
-                if (stab_section) {
-                    if (s == stab_section)
-                        stab_index = i;
-                    if (s == stab_section->link)
-                        stabstr_index = i;
-                }
-                goto found;
+            if (strcmp(s->name, sh_name))
+                continue;
+            if (sh->sh_type != s->sh_type
+                && s != eh_frame_section
+                ) {
+                tcc_error_noabort("section type conflict: %s %02x <> %02x", s->name, sh->sh_type, s->sh_type);
+                goto the_end;
             }
+            if (!strncmp(sh_name, ".gnu.linkonce", 13)) {
+                /* if a 'linkonce' section is already present, we
+                   do not add it again. It is a little tricky as
+                   symbols can still be defined in
+                   it. */
+                sm_table[i].link_once = 1;
+                goto next;
+            }
+            if (stab_section) {
+                if (s == stab_section)
+                    stab_index = i;
+                if (s == stab_section->link)
+                    stabstr_index = i;
+            }
+            goto found;
         }
         /* not found: create new section */
         s = new_section(s1, sh_name, sh->sh_type, sh->sh_flags & ~SHF_GROUP);
@@ -3181,14 +3216,6 @@ invalid:
         s->sh_entsize = sh->sh_entsize;
         sm_table[i].new_section = 1;
     found:
-        if (sh->sh_type != s->sh_type
-#if TARGETOS_OpenBSD || TARGETOS_FreeBSD || TARGETOS_NetBSD
-            && strcmp (s->name, ".eh_frame")
-#endif
-            ) {
-            tcc_error_noabort("invalid section type");
-            goto the_end;
-        }
         /* align start of section */
         s->data_offset += -s->data_offset & (sh->sh_addralign - 1);
         if (sh->sh_addralign > s->sh_addralign)
@@ -3397,7 +3424,7 @@ static int tcc_load_alacarte(TCCState *s1, int fd, int size, int entrysize)
 
     data = tcc_malloc(size);
     if (full_read(fd, data, size) != size)
-        goto the_end;
+        goto invalid;
     nsyms = get_be(data, entrysize);
     ar_index = data + entrysize;
     ar_names = (char *) ar_index + nsyms * entrysize;
@@ -3415,6 +3442,7 @@ static int tcc_load_alacarte(TCCState *s1, int fd, int size, int entrysize)
             off = get_be(ar_index + i * entrysize, entrysize);
             len = read_ar_header(fd, off, &hdr);
             if (len <= 0 || memcmp(hdr.ar_fmag, ARFMAG, 2)) {
+        invalid:
                 tcc_error_noabort("invalid archive");
                 goto the_end;
             }
@@ -3884,7 +3912,7 @@ static int ld_add_file(TCCState *s1, const char filename[])
 
 static int ld_add_file_list(TCCState *s1, const char *cmd, int as_needed)
 {
-    char filename[1024], libname[1024];
+    char filename[1024], libname[1016];
     int t, group, nblibs = 0, ret = 0;
     char **libs = NULL;
 
