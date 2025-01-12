@@ -29,8 +29,9 @@ int find(int n, int i1, int a, int b, int op)
         for(j=i+1;j<nb_num;j++) {
             a = tab[i];
             b = tab[j];
-            if (a != 0 && b != 0) {
-
+       //     if (a != 0 && b != 0) {// consider demorgan here
+				// not (a == 0  || b == 0)
+				if ( ! ( a == 0 ) || (b == 0) ) {
                 tab[j] = 0;
                 stack_ptr++;
 
@@ -42,6 +43,8 @@ int find(int n, int i1, int a, int b, int op)
                     return 1;
                 if (find(a * b, i, a, b, '*'))
                     return 1;
+                    
+                    // check to avoid divide by zero 
                 if (b != 0) {
                     c = a / b;
                     if (find(c, i, a, b, '/'))
