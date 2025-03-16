@@ -98,6 +98,7 @@ static const char help2[] =
     "  -On                           same as -D__OPTIMIZE__ for n > 0\n"
     "  -Wp,-opt                      same as -opt\n"
     "  -include file                 include 'file' above each input file\n"
+    "  -nostdlib                     do not link with standard crt/libs\n"
     "  -isystem dir                  add 'dir' to system include path\n"
     "  -static                       link to static libraries (not recommended)\n"
     "  -dumpversion                  print version\n"
@@ -132,7 +133,7 @@ static const char help2[] =
     "  no-sse                        disable floats on x86_64\n"
 #endif
     "-Wl,... linker options:\n"
-    "  -nostdlib                     do not link with standard crt/libs\n"
+    "  -nostdlib                     do not search standard library paths\n"
     "  -[no-]whole-archive           load lib(s) fully/only as needed\n"
     "  -export-all-symbols           same as -rdynamic\n"
     "  -export-dynamic               same as -rdynamic\n"
@@ -152,6 +153,8 @@ static const char help2[] =
     "  -soname=                      set DT_SONAME elf tag\n"
 #if defined(TCC_TARGET_MACHO)
     "  -install_name=                set DT_SONAME elf tag (soname macOS alias)\n"
+#else
+    "  -Ipath, -dynamic-linker=path  set ELF interpreter to path\n"
 #endif
     "  -Bsymbolic                    set DT_SYMBOLIC elf tag\n"
     "  -oformat=[elf32/64-* binary]  set executable output format\n"
@@ -290,9 +293,6 @@ int main(int argc0, char **argv0)
 redo:
     argc = argc0, argv = argv0;
     s = s1 = tcc_new();
-#ifdef CONFIG_TCC_SWITCHES /* predefined options */
-    tcc_set_options(s, CONFIG_TCC_SWITCHES);
-#endif
     opt = tcc_parse_args(s, &argc, &argv, 1);
     if (opt < 0)
         return 1;
