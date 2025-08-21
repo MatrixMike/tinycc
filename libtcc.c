@@ -314,7 +314,7 @@ PUB_FUNC char *tcc_strdup(const char *str)
 #define MEM_DEBUG_MAGIC3 0xFEEDDEB3
 #define MEM_DEBUG_FILE_LEN 40
 #define MEM_DEBUG_CHECK3(header) \
-    ((mem_debug_header_t*)((char*)header + header->size))->magic3
+    (((unsigned char *) header->magic3) + header->size)
 #define MEM_USER_PTR(header) \
     ((char *)header + offsetof(mem_debug_header_t, magic3))
 #define MEM_HEADER_PTR(ptr) \
@@ -804,7 +804,6 @@ static int tcc_compile(TCCState *s1, int filetype, const char *str, int fd)
     s1->error_set_jmp_enabled = 1;
 
     if (setjmp(s1->error_jmp_buf) == 0) {
-        s1->nb_errors = 0;
 
         if (fd == -1) {
             int len = strlen(str);
@@ -1457,6 +1456,8 @@ static int tcc_set_linker(TCCState *s, const char *optarg)
             s->filetype |= AFF_WHOLE_ARCHIVE;
         } else if (link_option(&o, "no-whole-archive")) {
             s->filetype &= ~AFF_WHOLE_ARCHIVE;
+        } else if (link_option(&o, "znodelete")) {
+            s->znodelete = 1;
 #ifdef TCC_TARGET_PE
         } else if (link_option(&o, "large-address-aware")) {
             s->pe_characteristics |= 0x20;
@@ -1465,31 +1466,9 @@ static int tcc_set_linker(TCCState *s, const char *optarg)
         } else if (link_option(&o, "stack=")) {
             s->pe_stack_size = strtoul(o.arg, &end, 10);
         } else if (link_option(&o, "subsystem=")) {
-#if defined(TCC_TARGET_I386) || defined(TCC_TARGET_X86_64)
-            if (0==strcmp("native", o.arg)) {
-                s->pe_subsystem = 1;
-            } else if (0==strcmp("console", o.arg)) {
-                s->pe_subsystem = 3;
-            } else if (0==strcmp("gui", o.arg) || 0==strcmp("windows", o.arg)) {
-                s->pe_subsystem = 2;
-            } else if (0==strcmp("posix", o.arg)) {
-                s->pe_subsystem = 7;
-            } else if (0==strcmp("efiapp", o.arg)) {
-                s->pe_subsystem = 10;
-            } else if (0==strcmp("efiboot", o.arg)) {
-                s->pe_subsystem = 11;
-            } else if (0==strcmp("efiruntime", o.arg)) {
-                s->pe_subsystem = 12;
-            } else if (0==strcmp("efirom", o.arg)) {
-                s->pe_subsystem = 13;
-#elif defined(TCC_TARGET_ARM)
-            if (0==strcmp("wince", o.arg)) {
-                s->pe_subsystem = 9;
-#endif
-            } else
+            if (pe_setsubsy(s, o.arg) < 0)
                 goto err;
-#endif /* PE */
-#ifdef TCC_TARGET_MACHO
+#elif defined TCC_TARGET_MACHO
         } else if (link_option(&o, "all_load")) {
 	    s->filetype |= AFF_WHOLE_ARCHIVE;
         } else if (link_option(&o, "force_load=")) {
@@ -1653,11 +1632,10 @@ static const TCCOption tcc_options[] = {
     { "w", TCC_OPTION_w, 0 },
     { "E", TCC_OPTION_E, 0},
     { "M", TCC_OPTION_M, 0},
-    { "MD", TCC_OPTION_MD, 0},
-    { "MF", TCC_OPTION_MF, TCC_OPTION_HAS_ARG },
     { "MM", TCC_OPTION_MM, 0},
-    { "MMD,", TCC_OPTION_MMD, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
-    { "MMD", TCC_OPTION_MMD, 0},
+    { "MD", TCC_OPTION_MD, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
+    { "MMD", TCC_OPTION_MMD, TCC_OPTION_HAS_ARG | TCC_OPTION_NOSEP },
+    { "MF", TCC_OPTION_MF, TCC_OPTION_HAS_ARG },
     { "MP", TCC_OPTION_MP, 0},
     { "x", TCC_OPTION_x, TCC_OPTION_HAS_ARG },
     /* tcctools */
@@ -1837,8 +1815,7 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
     const TCCOption *popt;
     const char *optarg, *r;
     const char *run = NULL;
-    int x;
-    int tool = 0, arg_start = 0, not_empty = 0, optind = 1;
+    int optind = 1, empty = 1, x;
     char **argv = *pargv;
     int argc = *pargc;
 
@@ -1857,21 +1834,16 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
             continue;
         }
         optind++;
-        if (tool) { /* ignore all except -v and @listfile */
-            s->verbose += !strcmp(r, "-v");
-            continue;
-        }
-
         if (r[0] != '-' || r[1] == '\0') { /* file or '-' (stdin) */
             args_parser_add_file(s, r, s->filetype);
-            not_empty = 1;
+            empty = 0;
         dorun:
             if (run) {
                 /* tcc -run <file> <args...> */
-                if (tcc_set_options(s, run))
+                if (tcc_set_options(s, run) < 0)
                     return -1;
-                arg_start = optind - 1; /* argv[0] will be <file> */
-                break;
+                x = 0;
+                goto extra_action;
             }
             continue;
         }
@@ -1944,14 +1916,16 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
         case TCC_OPTION_g:
             s->do_debug = 2;
             s->dwarf = CONFIG_DWARF_VERSION;
+        g_redo:
             if (strstart("dwarf", &optarg)) {
                 s->dwarf = (*optarg) ? (0 - atoi(optarg)) : DEFAULT_DWARF_VERSION;
             } else if (0 == strcmp("stabs", optarg)) {
                 s->dwarf = 0;
             } else if (isnum(*optarg)) {
-                x = *optarg - '0';
+                x = *optarg++ - '0';
                 /* -g0 = no info, -g1 = lines/functions only, -g2 = full info */
                 s->do_debug = x > 2 ? 2 : x == 0 && s->do_backtrace ? 1 : x;
+                goto g_redo;
 #ifdef TCC_TARGET_PE
             } else if (0 == strcmp(".pdb", optarg)) {
                 s->dwarf = 5, s->do_debug |= 16;
@@ -1993,7 +1967,6 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
         case TCC_OPTION_o:
             if (s->outfile) {
                 tcc_warning("multiple -o option");
-                tcc_free(s->outfile);
             }
             tcc_set_str(&s->outfile, optarg);
             break;
@@ -2052,7 +2025,6 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
             }
             break;
         case TCC_OPTION_W:
-            s->warn_none = 0;
             if (optarg[0] && set_flag(s, options_W, optarg) < 0)
                 goto unsupported_option;
             break;
@@ -2076,6 +2048,7 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
         case TCC_OPTION_P:
             s->Pflag = atoi(optarg) + 1;
             break;
+
         case TCC_OPTION_M:
             s->include_sys_deps = 1;
             // fall through
@@ -2085,29 +2058,31 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
             if (!s->deps_outfile)
                 tcc_set_str(&s->deps_outfile, "-");
             break;
+        case TCC_OPTION_MD:
+            s->include_sys_deps = 1;
+            // fall through
         case TCC_OPTION_MMD:
             s->gen_deps = 1;
             /* usually, only "-MMD" is used */
             /* but the Linux Kernel uses "-MMD,depfile" */
-            if (optarg)
-                tcc_set_str(&s->deps_outfile, optarg);
-            break;
-        case TCC_OPTION_MD:
-            s->gen_deps = 1;
-            s->include_sys_deps = 1;
-            break;
+            if (*optarg != ',')
+                break;
+            ++optarg;
+            // fall through
         case TCC_OPTION_MF:
             tcc_set_str(&s->deps_outfile, optarg);
             break;
         case TCC_OPTION_MP:
             s->gen_phony_deps = 1;
             break;
+
         case TCC_OPTION_dumpmachine:
             printf("%s\n", dumpmachine_str);
             exit(0);
         case TCC_OPTION_dumpversion:
             printf ("%s\n", TCC_VERSION);
             exit(0);
+
         case TCC_OPTION_x:
             x = 0;
             if (*optarg == 'c')
@@ -2160,29 +2135,24 @@ PUB_FUNC int tcc_parse_args(TCCState *s, int *pargc, char ***pargv)
         case TCC_OPTION_ar:
             x = OPT_AR;
         extra_action:
-            arg_start = optind - 1;
-            if (not_empty)
+            if (NULL == argv[0]) /* from tcc_set_options() */
+                return -1;
+            if (!empty && x)
                 return tcc_error_noabort("cannot parse %s here", r);
-            tool = x;
-            break;
+            --optind;
+            *pargc = argc - optind;
+            *pargv = argv + optind;
+            return x;
         default:
 unsupported_option:
             tcc_warning_c(warn_unsupported)("unsupported option '%s'", r);
             break;
         }
-        not_empty = 1;
+        empty = 0;
     }
-
     if (s->link_optind < s->link_argc)
         return tcc_error_noabort("argument to '-Wl,%s' is missing", s->link_argv[s->link_optind]);
-    if (NULL == argv[0]) /* from tcc_set_options() */
-        return 0;
-    if (arg_start) {
-        *pargc = argc - arg_start;
-        *pargv = argv + arg_start;
-        return tool;
-    }
-    if (not_empty)
+    if (!empty)
         return 0;
     if (s->verbose == 2)
         return OPT_PRINT_DIRS;

@@ -104,7 +104,7 @@ static addr_t func_bound_offset;
 static unsigned long func_bound_ind;
 ST_DATA int func_bound_add_epilog;
 static void gen_bounds_prolog(void);
-static void gen_bounds_epilog(Sym *func_sym);
+static void gen_bounds_epilog(void);
 #endif
 
 /* XXX: make it faster ? */
@@ -406,6 +406,8 @@ ST_FUNC void gfunc_call(int nb_args)
         gbound_args(nb_args);
 #endif
 
+    save_regs(nb_args + 1);
+
     args_size = 0;
     for(i = 0;i < nb_args; i++) {
         if ((vtop->type.t & VT_BTYPE) == VT_STRUCT) {
@@ -415,6 +417,7 @@ ST_FUNC void gfunc_call(int nb_args)
             /* allocate the necessary size on stack */
 #ifdef TCC_TARGET_PE
             if (size >= 4096) {
+                save_reg(TREG_EDX);
                 r = get_reg(RC_EAX);
                 oad(0x68, size); // push size
                 /* cannot call normal 'alloca' with bound checking */
@@ -463,7 +466,7 @@ ST_FUNC void gfunc_call(int nb_args)
         }
         vtop--;
     }
-    save_regs(0); /* save used temporary registers */
+
     func_sym = vtop->type.ref;
     func_call = func_sym->f.func_call;
     /* fast call case */
@@ -575,8 +578,7 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
             param_addr = addr;
             addr += size;
         }
-        sym_push(sym->v & ~SYM_FIELD, type,
-                 VT_LOCAL | VT_LVAL, param_addr);
+        gfunc_set_param(sym, param_addr, 0);
         param_index++;
     }
     func_ret_sub = 0;
@@ -595,15 +597,14 @@ ST_FUNC void gfunc_prolog(Sym *func_sym)
 }
 
 /* generate function epilog */
-ST_FUNC void gfunc_epilog(Sym *func_sym)
+ST_FUNC void gfunc_epilog(void)
 {
     addr_t v, saved_ind;
 
 #ifdef CONFIG_TCC_BCHECK
     if (tcc_state->do_bounds_check)
-        gen_bounds_epilog(func_sym);
+        gen_bounds_epilog();
 #endif
-    func_sym = NULL;
 
     /* align local size to word & save local variables */
     v = (-loc + 3) & -4;
@@ -1041,22 +1042,6 @@ ST_FUNC void ggoto(void)
     vtop--;
 }
 
-ST_FUNC void save_return_reg(CType *func_type)
-{
-    int ireg = !is_float(func_type->t & VT_BTYPE);
-
-    if (ireg)
-        o(0x5250); /* push %rax; %push %rdx */
-}
-
-ST_FUNC void restore_return_reg(CType *func_type)
-{
-    int ireg = !is_float(func_type->t & VT_BTYPE);
-
-    if (ireg)
-        o(0x585a); /* pop %rdx; pop %rax */
-}
-
 /* bound check support functions */
 #ifdef CONFIG_TCC_BCHECK
 
@@ -1070,13 +1055,12 @@ static void gen_bounds_prolog(void)
     oad(0xb8, 0); /* call to function */
 }
 
-static void gen_bounds_epilog(Sym *func_sym)
+static void gen_bounds_epilog(void)
 {
     addr_t saved_ind;
     addr_t *bounds_ptr;
     Sym *sym_data;
     int offset_modified = func_bound_offset != lbounds_section->data_offset;
-    CType *func_type = &func_sym->type.ref->type;
 
     if (!offset_modified && !func_bound_add_epilog)
         return;
@@ -1099,13 +1083,11 @@ static void gen_bounds_epilog(Sym *func_sym)
     }
 
     /* generate bound check local freeing */
-    if (func_type->t != VT_VOID)
-        save_return_reg(func_type);
+    o(0x5250); /* save returned value, if any */
     greloc(cur_text_section, sym_data, ind + 1, R_386_32);
     oad(0xb8, 0); /* mov %eax, xxx */
     gen_static_call(TOK___bound_local_delete);
-    if (func_type->t != VT_VOID)
-        restore_return_reg(func_type);
+    o(0x585a); /* restore returned value, if any */
 }
 #endif
 

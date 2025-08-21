@@ -1129,6 +1129,8 @@ static void relocate_section(TCCState *s1, Section *s, Section *sr)
 
     qrel = (ElfW_Rel *)sr->data;
     for_each_elem(sr, 0, rel, ElfW_Rel) {
+	if (s->data == NULL) /* bss */
+	    continue;
         ptr = s->data + rel->r_offset;
         sym_index = ELFW(R_SYM)(rel->r_info);
         sym = &((ElfW(Sym) *)symtab_section->data)[sym_index];
@@ -1595,7 +1597,7 @@ ST_FUNC void tcc_add_btstub(TCCState *s1)
 
     s = data_section;
     /* Align to PTR_SIZE */
-    section_ptr_add(s, -s->data_offset & (PTR_SIZE - 1));
+    section_add(s, 0, PTR_SIZE);
     o = s->data_offset;
     /* create a struct rt_context (see tccrun.c) */
     if (s1->dwarf) {
@@ -2834,7 +2836,6 @@ static int elf_output_file(TCCState *s1, const char *filename)
     int textrel, got_sym, dt_flags_1;
 
     file_type = s1->output_type;
-    s1->nb_errors = 0;
     ret = -1;
     interp = dynstr = dynamic = NULL;
     sec_order = NULL;
@@ -2936,6 +2937,8 @@ static int elf_output_file(TCCState *s1, const char *filename)
                 put_dt(dynamic, DT_TEXTREL, 0);
             if (file_type & TCC_OUTPUT_EXE)
                 dt_flags_1 = DF_1_NOW | DF_1_PIE;
+	    if (s1->znodelete)
+		dt_flags_1 |= DF_1_NODELETE;
         }
         put_dt(dynamic, DT_FLAGS, DF_BIND_NOW);
         put_dt(dynamic, DT_FLAGS_1, dt_flags_1);
@@ -3025,7 +3028,6 @@ static int elf_output_obj(TCCState *s1, const char *filename)
 {
     Section *s;
     int i, ret, file_offset;
-    s1->nb_errors = 0;
     /* Allocate strings for section names */
     alloc_sec_names(s1, 1);
     file_offset = (sizeof (ElfW(Ehdr)) + 3) & -4;
@@ -3044,6 +3046,7 @@ static int elf_output_obj(TCCState *s1, const char *filename)
 
 LIBTCCAPI int tcc_output_file(TCCState *s, const char *filename)
 {
+    s->nb_errors = 0;
     if (s->test_coverage)
         tcc_tcov_add_file(s, filename);
     if (s->output_type == TCC_OUTPUT_OBJ)
@@ -3249,21 +3252,19 @@ invalid:
         s->sh_entsize = sh->sh_entsize;
         sm_table[i].new_section = 1;
     found:
+        size = sh->sh_size;
         /* align start of section */
-        s->data_offset += -s->data_offset & (sh->sh_addralign - 1);
+        offset = section_add(s, size, sh->sh_addralign);
         if (sh->sh_addralign > s->sh_addralign)
             s->sh_addralign = sh->sh_addralign;
-        sm_table[i].offset = s->data_offset;
+        sm_table[i].offset = offset;
         sm_table[i].s = s;
         /* concatenate sections */
-        size = sh->sh_size;
-        if (sh->sh_type != SHT_NOBITS) {
+        if (sh->sh_type != SHT_NOBITS && size) {
             unsigned char *ptr;
             lseek(fd, file_offset + sh->sh_offset, SEEK_SET);
-            ptr = section_ptr_add(s, size);
+            ptr = s->data + offset;
             full_read(fd, ptr, size);
-        } else {
-            s->data_offset += size;
         }
 #if defined TCC_TARGET_ARM || defined TCC_TARGET_ARM64 || defined TCC_TARGET_RISCV64
         /* align code sections to instruction lenght */
@@ -3304,6 +3305,9 @@ invalid:
             s1->sections[s->sh_info]->reloc = s;
         }
     }
+
+    if (!symtab)
+        goto done;
 
     /* resolve symbols */
     old_to_new_syms = tcc_mallocz(nb_syms * sizeof(int));
@@ -3400,7 +3404,7 @@ invalid:
             break;
         }
     }
-
+ done:
     ret = 0;
  the_end:
     tcc_free(symtab);
@@ -3937,7 +3941,7 @@ static int ld_add_file(TCCState *s1, const char filename[])
 {
     if (filename[0] == '-' && filename[1] == 'l')
         return tcc_add_library(s1, filename + 2);
-    if (CONFIG_SYSROOT[0] != '\0') {
+    if (CONFIG_SYSROOT[0] != '\0' || !IS_ABSPATH(filename)) {
         /* lookup via library paths */
         int ret = tcc_add_dll(s1, tcc_basename(filename), 0);
         if (ret != FILE_NOT_FOUND)
@@ -3981,19 +3985,19 @@ repeat:
         } else if (t != LD_TOK_NAME) {
             return tcc_error_noabort("unexpected token '%c'", t);
         } else if (!strcmp(filename, "AS_NEEDED")) {
-            ret = ld_add_file_list(s1, filename);
+            ret |= ld_add_file_list(s1, filename);
         } else if (c == 'I' || c == 'G' || c == 'A') {
-            ret = ld_add_file(s1, filename);
+            ret |= !!ld_add_file(s1, filename);
         }
-        if (ret)
-            return -1;
+        if (ret < 0)
+            return ret;
         t = ld_next(s1, filename, sizeof(filename));
         if (t == ',')
             t = ld_next(s1, filename, sizeof(filename));
     }
-    if (c == 'G' && new_undef_sym(s1, sym_offset))
+    if (c == 'G' && ret == 0 && new_undef_sym(s1, sym_offset))
         goto repeat;
-    return 0;
+    return ret;
 }
 
 /* interpret a subset of GNU ldscripts to handle the dummy libc.so
@@ -4001,7 +4005,7 @@ repeat:
 ST_FUNC int tcc_load_ldscript(TCCState *s1, int fd)
 {
     char cmd[64];
-    int t, ret = FILE_NOT_RECOGNIZED;
+    int t, ret = 0, noscript = 1;
     unsigned char *text_ptr, *saved_ptr;
 
     saved_ptr = s1->ld_p;
@@ -4012,19 +4016,22 @@ ST_FUNC int tcc_load_ldscript(TCCState *s1, int fd)
             break;
         if (!strcmp(cmd, "INPUT") ||
             !strcmp(cmd, "GROUP")) {
-            ret = ld_add_file_list(s1, cmd);
+            ret |= ld_add_file_list(s1, cmd);
         } else if (!strcmp(cmd, "OUTPUT_FORMAT") ||
                    !strcmp(cmd, "TARGET")) {
             /* ignore some commands */
-            ret = ld_add_file_list(s1, cmd);
-        } else if (0 == ret) {
+            ret |= ld_add_file_list(s1, cmd);
+        } else if (noscript) {
+            ret = FILE_NOT_RECOGNIZED;
+        } else {
             ret = tcc_error_noabort("unexpected '%s'", cmd);
         }
-        if (ret)
+        if (ret < 0)
             break;
+        noscript = 0;
     }
     tcc_free(text_ptr);
     s1->ld_p = saved_ptr;
-    return ret;
+    return ret < 0 ? ret : -ret;
 }
 #endif /* !ELF_OBJ_ONLY */

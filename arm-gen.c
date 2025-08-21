@@ -310,7 +310,7 @@ static uint32_t stuff_const(uint32_t op, uint32_t c)
     if(c<256) /* catch undefined <<32 */
       return op|c;
     for(i=2;i<32;i+=2) {
-      m=(0xff>>i)|(0xff<<(32-i));
+      m=(0xffu>>i)|(0xffu<<(32-i));
       if(!(c&~m))
 	return op|(i<<7)|(c<<i)|(c>>(32-i));
     }
@@ -593,7 +593,7 @@ void load(int r, SValue *sv)
     sign=0;
   else {
     sign=1;
-    fc=-fc;
+    fc=-(unsigned)fc;
   }
 
   v = fr & VT_VALMASK;
@@ -837,32 +837,6 @@ static void gcall_or_jmp(int is_jmp)
   }
 }
 
-ST_FUNC void save_return_reg(CType *func_type)
-{
-    int freg = is_float(func_type->t & VT_BTYPE);
-    int ireg = !freg;
-
-    if ((func_type->t & VT_BTYPE) == VT_STRUCT)
-        ireg = freg = 1;
-    if (ireg)
-        o(0xe92d0003);  /* push {r0,r1} */
-    if (freg)
-        o(0xed2d0b04);  /* vpush {d0,d1} */
-}
-
-ST_FUNC void restore_return_reg(CType *func_type)
-{
-    int freg = is_float(func_type->t & VT_BTYPE);
-    int ireg = !freg;
-
-    if ((func_type->t & VT_BTYPE) == VT_STRUCT)
-        ireg = freg = 1;
-    if (freg)
-        o(0xecbd0b04); /* vpop {d0,d1} */
-    if (ireg)
-        o(0xe8bd0003); /* pop {r0,r1} */
-}
-
 #if defined(CONFIG_TCC_BCHECK)
 
 static void gen_bounds_call(int v)
@@ -886,13 +860,12 @@ static void gen_bounds_prolog(void)
     o(0xe1a00000);  /* call __bound_local_new */
 }
 
-static void gen_bounds_epilog(Sym *func_sym)
+static void gen_bounds_epilog(void)
 {
     addr_t saved_ind;
     addr_t *bounds_ptr;
     Sym *sym_data;
     int offset_modified = func_bound_offset != lbounds_section->data_offset;
-    CType *func_type = &func_sym->type.ref->type;
 
     if (!offset_modified && !func_bound_add_epilog)
         return;
@@ -918,16 +891,16 @@ static void gen_bounds_epilog(Sym *func_sym)
     }
 
     /* generate bound check local freeing */
-    if (func_type->t != VT_VOID)
-	save_return_reg(func_type);
+    o(0xe92d0003);  /* push {r0,r1} */
+    o(0xed2d0b04);  /* vpush {d0,d1} */
     o(0xe59f0000);  /* ldr r0, [pc] */
     o(0xea000000);  /* b $+4 */
     greloc(cur_text_section, sym_data, ind, R_ARM_REL32);
     o(-12);  /* lbounds_section->data_offset */
     o(0xe080000f);  /* add r0,r0,pc */
     gen_bounds_call(TOK___bound_local_delete);
-    if (func_type->t != VT_VOID)
-	restore_return_reg(func_type);
+    o(0xecbd0b04); /* vpop {d0,d1} */
+    o(0xe8bd0003); /* pop {r0,r1} */
 }
 #endif
 
@@ -1338,10 +1311,6 @@ again:
   if (++pass < 2)
     goto again;
 
-  /* Manually free remaining registers since next parameters are loaded
-   * manually, without the help of gv(int). */
-  save_regs(nb_args);
-
   if(todo) {
     o(0xE8BD0000|todo); /* pop {todo} */
     for(pplan = plan->clsplans[CORE_STRUCT_CLASS]; pplan; pplan = pplan->prev) {
@@ -1380,6 +1349,8 @@ void gfunc_call(int nb_args)
   if (tcc_state->do_bounds_check)
     gbound_args(nb_args);
 #endif
+
+  save_regs(nb_args + 1);
 
 #ifdef TCC_ARM_EABI
   if (float_abi == ARM_HARD_FLOAT) {
@@ -1522,8 +1493,7 @@ from_stack:
       addr = (n + nf + sn) * 4;
       sn += size;
     }
-    sym_push(sym->v & ~SYM_FIELD, type, VT_LOCAL | VT_LVAL,
-             addr + 12);
+    gfunc_set_param(sym, addr + 12, 0);
   }
   last_itod_magic=0;
   leaffunc = 1;
@@ -1535,17 +1505,15 @@ from_stack:
 }
 
 /* generate function epilog */
-void gfunc_epilog(Sym *func_sym)
+void gfunc_epilog(void)
 {
   uint32_t x;
   int diff;
 
 #ifdef CONFIG_TCC_BCHECK
   if (tcc_state->do_bounds_check)
-    gen_bounds_epilog(func_sym);
+    gen_bounds_epilog();
 #endif
-  func_sym = NULL;
-
   /* Copy float return value to core register if base standard is used and
      float computation is made with VFP */
 #if defined(TCC_ARM_EABI) && defined(TCC_ARM_VFP)

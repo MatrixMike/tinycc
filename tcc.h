@@ -95,6 +95,10 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # define O_BINARY 0
 #endif
 
+#ifdef __clang__ // clang -fsanitize compains about: NULL+value
+#define offsetof(type, field) __builtin_offsetof(type, field)
+#endif
+
 #ifndef offsetof
 #define offsetof(type, field) ((size_t) &((type *)0)->field)
 #endif
@@ -736,6 +740,7 @@ struct TCCState {
     unsigned char static_link; /* if true, static linking is performed */
     unsigned char rdynamic; /* if true, all symbols are exported */
     unsigned char symbolic; /* if true, resolve symbols in the current module first */
+    unsigned char znodelete; /* Set DF_1_NODELETE in dynamic section */
     unsigned char filetype; /* file type for compilation (NONE,C,ASM) */
     unsigned char optimize; /* only to #define __OPTIMIZE__ */
     unsigned char option_pthread; /* -pthread option */
@@ -1501,6 +1506,7 @@ ST_FUNC int classify_x86_64_va_arg(CType *ty);
 ST_FUNC void gbound_args(int nb_args);
 ST_DATA int func_bound_add_epilog;
 #endif
+ST_FUNC Sym *gfunc_set_param(Sym *s, int c, int byref);
 
 /* ------------ tccelf.c ------------ */
 
@@ -1607,9 +1613,7 @@ ST_FUNC void store(int r, SValue *v);
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *align, int *regsize);
 ST_FUNC void gfunc_call(int nb_args);
 ST_FUNC void gfunc_prolog(Sym *func_sym);
-ST_FUNC void gfunc_epilog(Sym *func_sym);
-ST_FUNC void save_return_reg(CType *func_type);
-ST_FUNC void restore_return_reg(CType *func_type);
+ST_FUNC void gfunc_epilog(void);
 ST_FUNC void gen_fill_nops(int);
 ST_FUNC int gjmp(int t);
 ST_FUNC void gjmp_addr(int a);
@@ -1691,7 +1695,7 @@ dwarf_read_sleb128(unsigned char **ln, unsigned char *end)
         retval |= (byte & 0x7f) << (i * 7);
 	if ((byte & 0x80) == 0) {
 	    if ((byte & 0x40) && (i + 1) * 7 < 64)
-		retval |= -1LL << ((i + 1) * 7);
+		retval |= (uint64_t)-1LL << ((i + 1) * 7);
 	    break;
 	}
     }
@@ -1792,6 +1796,7 @@ ST_FUNC void asm_clobber(uint8_t *clobber_regs, const char *str);
 ST_FUNC int pe_load_file(struct TCCState *s1, int fd, const char *filename);
 ST_FUNC int pe_output_file(TCCState * s1, const char *filename);
 ST_FUNC int pe_putimport(TCCState *s1, int dllindex, const char *name, addr_t value);
+ST_FUNC int pe_setsubsy(TCCState *s1, const char *arg);
 #if defined TCC_TARGET_I386 || defined TCC_TARGET_X86_64
 #endif
 #ifdef TCC_TARGET_X86_64
@@ -1852,7 +1857,7 @@ ST_FUNC void tcc_debug_eincl(TCCState *s1);
 ST_FUNC void tcc_debug_newfile(TCCState *s1);
 
 ST_FUNC void tcc_debug_line(TCCState *s1);
-ST_FUNC void tcc_add_debug_info(TCCState *s1, int param, Sym *s, Sym *e);
+ST_FUNC void tcc_add_debug_info(TCCState *s1, Sym *s, Sym *e);
 ST_FUNC void tcc_debug_funcstart(TCCState *s1, Sym *sym);
 ST_FUNC void tcc_debug_prolog_epilog(TCCState *s1, int value);
 ST_FUNC void tcc_debug_funcend(TCCState *s1, int size);

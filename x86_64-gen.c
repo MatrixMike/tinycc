@@ -120,6 +120,7 @@ ST_FUNC void gen_struct_copy(int size);
 
 ST_DATA const char * const target_machine_defs =
     "__x86_64__\0"
+    "__x86_64\0"
     "__amd64__\0"
     ;
 
@@ -396,6 +397,7 @@ void load(int r, SValue *sv)
             v1.type.t = VT_PTR;
             v1.r = VT_LOCAL | VT_LVAL;
             v1.c.i = fc;
+	    v1.sym = NULL;
             fr = r;
             if (!(reg_classes[fr] & (RC_INT|RC_R11)))
                 fr = get_reg(RC_INT);
@@ -408,6 +410,7 @@ void load(int r, SValue *sv)
 	    v1.type.t = VT_LLONG;
 	    v1.r = VT_CONST;
 	    v1.c.i = sv->c.i;
+	    v1.sym = NULL;
 	    fr = r;
 	    if (!(reg_classes[fr] & (RC_INT|RC_R11)))
 	        fr = get_reg(RC_INT);
@@ -655,50 +658,6 @@ static void gcall_or_jmp(int is_jmp)
     }
 }
 
-ST_FUNC void save_return_reg(CType *func_type)
-{
-    int freg = is_float(func_type->t & VT_BTYPE);
-    int ireg = !freg;
-
-    if ((func_type->t & VT_BTYPE) == VT_STRUCT)
-        ireg = freg = 1;
-    if (ireg)
-        o(0x5250); /* push %rax; %push %rdx */
-    if (freg) {
-	if ((func_type->t & VT_BTYPE) == VT_LDOUBLE ||
-	    (func_type->t & VT_BTYPE) == VT_STRUCT) {
-            o(0x10ec8348); /* sub $16,%rsp */
-	    o(0x243cdb);   /* fstpt (%rsp) */
-	}
-        o(0x20ec8348); /* sub $32,%rsp */
-        o(0x290f);     /* movaps %xmm0,0x10(%rsp) */
-        o(0x102444);
-        o(0x240c290f); /* movaps %xmm1,(%rsp) */
-    }
-}
-
-ST_FUNC void restore_return_reg(CType *func_type)
-{
-    int freg = is_float(func_type->t & VT_BTYPE);
-    int ireg = !freg;
-
-    if ((func_type->t & VT_BTYPE) == VT_STRUCT)
-        ireg = freg = 1;
-    if (freg) {
-        o(0x280f);     /* movaps 0x10(%rsp),%xmm0 */
-        o(0x102444);
-        o(0x240c280f); /* movaps (%rsp),%xmm1 */
-        o(0x20c48348); /* add $32,%rsp */
-	if ((func_type->t & VT_BTYPE) == VT_LDOUBLE ||
-	    (func_type->t & VT_BTYPE) == VT_STRUCT) {
-	    o(0x242cdb);   /* fldt (%rsp) */
-            o(0x10c48348); /* add $16,%rsp */
-	}
-    }
-    if (ireg)
-        o(0x585a); /* pop %rdx; pop %rax */
-}
-
 #if defined(CONFIG_TCC_BCHECK)
 
 static void gen_bounds_call(int v)
@@ -725,13 +684,12 @@ static void gen_bounds_prolog(void)
     oad(0xb8, 0); /* call to function */
 }
 
-static void gen_bounds_epilog(Sym *func_sym)
+static void gen_bounds_epilog(void)
 {
     addr_t saved_ind;
     addr_t *bounds_ptr;
     Sym *sym_data;
     int offset_modified = func_bound_offset != lbounds_section->data_offset;
-    CType *func_type = &func_sym->type.ref->type;
 
     if (!offset_modified && !func_bound_add_epilog)
         return;
@@ -754,14 +712,20 @@ static void gen_bounds_epilog(Sym *func_sym)
     }
 
     /* generate bound check local freeing */
-    if (func_type->t != VT_VOID)
-	save_return_reg(func_type);
+    o(0x5250); /* save returned value, if any */
+    o(0x20ec8348); /* sub $32,%rsp */
+    o(0x290f);     /* movaps %xmm0,0x10(%rsp) */
+    o(0x102444);
+    o(0x240c290f); /* movaps %xmm1,(%rsp) */
     greloca(cur_text_section, sym_data, ind + 3, R_X86_64_PC32, -4);
     o(0x0d8d48 + ((TREG_FASTCALL_1 == TREG_RDI) * 0x300000)); /* lea xxx(%rip), %rcx/rdi */
     gen_le32 (0);
     gen_bounds_call(TOK___bound_local_delete);
-    if (func_type->t != VT_VOID)
-	restore_return_reg(func_type);
+    o(0x280f);     /* movaps 0x10(%rsp),%xmm0 */
+    o(0x102444);
+    o(0x240c280f); /* movaps (%rsp),%xmm1 */
+    o(0x20c48348); /* add $32,%rsp */
+    o(0x585a); /* restore returned value, if any */
 }
 #endif
 
@@ -847,6 +811,8 @@ void gfunc_call(int nb_args)
     if (tcc_state->do_bounds_check)
         gbound_args(nb_args);
 #endif
+
+    save_regs(nb_args);
 
     args_size = (nb_args < REGN ? REGN : nb_args) * PTR_SIZE;
     arg = nb_args;
@@ -945,7 +911,7 @@ void gfunc_call(int nb_args)
         }
         vtop--;
     }
-    save_regs(0);
+
     /* Copy R10 and R11 into RCX and RDX, respectively */
     if (nb_args > 0) {
         o(0xd1894c); /* mov %r10, %rcx */
@@ -1009,8 +975,7 @@ void gfunc_prolog(Sym *func_sym)
             if (reg_param_index < REGN) {
                 gen_modrm64(0x89, arg_regs[reg_param_index], VT_LOCAL, NULL, addr);
             }
-            sym_push(sym->v & ~SYM_FIELD, type,
-                     VT_LLOCAL | VT_LVAL, addr);
+            gfunc_set_param(sym, addr, 1);
         } else {
             if (reg_param_index < REGN) {
                 /* save arguments passed by register */
@@ -1023,8 +988,7 @@ void gfunc_prolog(Sym *func_sym)
                     gen_modrm64(0x89, arg_regs[reg_param_index], VT_LOCAL, NULL, addr);
                 }
             }
-            sym_push(sym->v & ~SYM_FIELD, type,
-		     VT_LOCAL | VT_LVAL, addr);
+            gfunc_set_param(sym, addr, 0);
         }
         addr += 8;
         reg_param_index++;
@@ -1044,7 +1008,7 @@ void gfunc_prolog(Sym *func_sym)
 }
 
 /* generate function epilog */
-void gfunc_epilog(Sym *func_sym)
+void gfunc_epilog(void)
 {
     int v, start;
 
@@ -1054,9 +1018,8 @@ void gfunc_epilog(Sym *func_sym)
 
 #ifdef CONFIG_TCC_BCHECK
     if (tcc_state->do_bounds_check)
-        gen_bounds_epilog(func_sym);
+        gen_bounds_epilog();
 #endif
-    func_sym = NULL;
 
     o(0xc9); /* leave */
     if (func_ret_sub == 0) {
@@ -1289,6 +1252,8 @@ void gfunc_call(int nb_args)
         gbound_args(nb_args);
 #endif
 
+    save_regs(nb_args);
+
     /* calculate the number of integer/float register arguments, remember
        arguments to be passed via stack (in onstack[]), and also remember
        if we have to align the stack pointer to 16 (onstack[i] == 2).  Needs
@@ -1404,9 +1369,6 @@ void gfunc_call(int nb_args)
 
     tcc_free(onstack);
 
-    /* XXX This should be superfluous.  */
-    save_regs(0); /* save used temporary registers */
-
     /* then, we prepare register passing arguments.
        Note that we cannot set RDX and RCX in this loop because gv()
        may break these temporary registers. Let's use R10 and R11
@@ -1455,12 +1417,6 @@ void gfunc_call(int nb_args)
     }
     assert(gen_reg == 0);
     assert(sse_reg == 0);
-
-    /* We shouldn't have many operands on the stack anymore, but the
-       call address itself is still there, and it might be in %eax
-       (or edx/ecx) currently, which the below writes would clobber.
-       So evict all remaining operands here.  */
-    save_regs(0);
 
     /* Copy R10 and R11 into RDX and RCX, respectively */
     if (nb_reg_args > 2) {
@@ -1546,7 +1502,7 @@ void gfunc_prolog(Sym *func_sym)
 	gen_le32(seen_stack_size);
 	/* movq %r11, -0x10(%rbp) */
 	o(0xf05d894c);
-	/* leaq $-192(%rbp), %r11 */
+	/* leaq $-200(%rbp), %r11 */
 	o(0x9d8d4c);
 	gen_le32(-176 - 24);
 	/* movq %r11, -0x8(%rbp) */
@@ -1629,8 +1585,7 @@ void gfunc_prolog(Sym *func_sym)
         }
 	default: break; /* nothing to be done for x86_64_mode_none */
         }
-        sym_push(sym->v & ~SYM_FIELD, type,
-                 VT_LOCAL | VT_LVAL, param_addr);
+        gfunc_set_param(sym, param_addr, 0);
     }
 
 #ifdef CONFIG_TCC_BCHECK
@@ -1640,16 +1595,14 @@ void gfunc_prolog(Sym *func_sym)
 }
 
 /* generate function epilog */
-void gfunc_epilog(Sym *func_sym)
+void gfunc_epilog(void)
 {
     int v, saved_ind;
 
 #ifdef CONFIG_TCC_BCHECK
     if (tcc_state->do_bounds_check)
-        gen_bounds_epilog(func_sym);
+        gen_bounds_epilog();
 #endif
-    func_sym = NULL;
-
     o(0xc9); /* leave */
     if (func_ret_sub == 0) {
         o(0xc3); /* ret */
@@ -1984,6 +1937,7 @@ void gen_opf(int op)
                 v1.type.t = VT_PTR;
                 v1.r = VT_LOCAL | VT_LVAL;
                 v1.c.i = fc;
+                v1.sym = NULL;
                 load(r, &v1);
                 fc = 0;
                 vtop->r = r = r | VT_LVAL;
@@ -2052,6 +2006,7 @@ void gen_opf(int op)
                 v1.type.t = VT_PTR;
                 v1.r = VT_LOCAL | VT_LVAL;
                 v1.c.i = fc;
+	        v1.sym = NULL;
                 load(r, &v1);
                 fc = 0;
                 vtop->r = r = r | VT_LVAL;
@@ -2063,6 +2018,7 @@ void gen_opf(int op)
                 gv(RC_FLOAT);
                 vswap();
                 fc = vtop->c.i; /* bcheck may have saved previous vtop[-1] */
+                r = vtop->r;
             }
             
             if ((ft & VT_BTYPE) == VT_DOUBLE) {
