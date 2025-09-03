@@ -95,12 +95,12 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # define O_BINARY 0
 #endif
 
+#ifndef offsetof
 #ifdef __clang__ // clang -fsanitize compains about: NULL+value
 #define offsetof(type, field) __builtin_offsetof(type, field)
-#endif
-
-#ifndef offsetof
+#else
 #define offsetof(type, field) ((size_t) &((type *)0)->field)
+#endif
 #endif
 
 #ifndef countof
@@ -1074,7 +1074,7 @@ struct filespec {
 
 #define VT_UNION    (1 << VT_STRUCT_SHIFT | VT_STRUCT)
 #define VT_ENUM     (2 << VT_STRUCT_SHIFT) /* integral type is an enum really */
-#define VT_ENUM_VAL (3 << VT_STRUCT_SHIFT) /* integral type is an enum constant really */
+#define VT_ENUM_VAL (4 << VT_STRUCT_SHIFT) /* integral type is an enum constant really */
 
 #define IS_ENUM(t) ((t & VT_STRUCT_MASK) == VT_ENUM)
 #define IS_ENUM_VAL(t) ((t & VT_STRUCT_MASK) == VT_ENUM_VAL)
@@ -1864,7 +1864,7 @@ ST_FUNC void tcc_debug_funcend(TCCState *s1, int size);
 ST_FUNC void tcc_debug_extern_sym(TCCState *s1, Sym *sym, int sh_num, int sym_bind, int sym_type);
 ST_FUNC void tcc_debug_typedef(TCCState *s1, Sym *sym);
 ST_FUNC void tcc_debug_stabn(TCCState *s1, int type, int value);
-ST_FUNC void tcc_debug_fix_anon(TCCState *s1, CType *t);
+ST_FUNC void tcc_debug_fix_forw(TCCState *s1, CType *t);
 
 #if !(defined ELF_OBJ_ONLY || defined TCC_TARGET_ARM || defined TARGETOS_BSD)
 ST_FUNC void tcc_eh_frame_start(TCCState *s1);

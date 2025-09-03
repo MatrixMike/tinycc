@@ -1263,7 +1263,7 @@ static void patch_type(Sym *sym, CType *type)
     } else {
         if ((sym->type.t & VT_ARRAY) && type->ref->c >= 0) {
             /* set array size if it was omitted in extern declaration */
-            sym->type.ref = type->ref;
+            sym->type.ref->c = type->ref->c;
         }
         if ((type->t ^ sym->type.t) & VT_STATIC)
             tcc_warning("storage mismatch for redefinition of '%s'",
@@ -1294,16 +1294,21 @@ static Sym *sym_copy(Sym *s0, Sym **ps)
     Sym *s;
     s = sym_malloc(), *s = *s0;
     s->prev = *ps, *ps = s;
-    if ((s->v & ~SYM_STRUCT) < SYM_FIRST_ANOM)
+    if ((s->v & ~SYM_STRUCT) < SYM_FIRST_ANOM && ps == &local_stack)
         sym_link(s, 1);
     return s;
 }
 
-/* copy s->type.ref to stack 'ps' for VT_FUNC and VT_PTR */
+/* Symbol 's' was locally declared 'extern' (or as function), and
+   is on global_stack.  Now must copy its 'ref' to global_stack too */
 static void sym_copy_ref(Sym *s, Sym **ps)
 {
     int bt = s->type.t & VT_BTYPE;
-    if (bt == VT_FUNC || bt == VT_PTR || (bt == VT_STRUCT && s->sym_scope)) {
+    if (bt == VT_PTR
+        || bt == VT_FUNC
+        || ((bt == VT_STRUCT || IS_ENUM(s->type.t))
+            && s->type.ref
+            && s->type.ref->sym_scope)) {
         Sym **sp = &s->type.ref;
         for (s = *sp, *sp = NULL; s; s = s->next) {
             Sym *s2 = sym_copy(s, ps);
@@ -4426,13 +4431,19 @@ do_decl:
         /* non empty enums are not allowed */
         ps = &s->next;
         if (u == VT_ENUM) {
-            long long ll = 0, pl = 0, nl = 0;
+            long long ll = 0, pl = 0, nl = 0, ni = 0, pi = 0;
+	    unsigned long long mu = 0;
 	    CType t;
             t.ref = s;
             /* enum symbols have static storage */
             t.t = VT_INT|VT_STATIC|VT_ENUM_VAL;
-            if (bt)
+            if (bt) {
                 t.t = bt|VT_STATIC|VT_ENUM_VAL;
+		mu = 1llu << (type_size(&t, &align) * 8 - 1);
+		pi = mu - 1;
+		ni = -mu;
+		mu = (mu << 1) - 1u;
+	    }
             for(;;) {
                 v = tok;
                 if (v < TOK_UIDENT)
@@ -4446,6 +4457,10 @@ do_decl:
                     next();
 		    ll = expr_const64();
                 }
+		if (bt && (t.t & VT_UNSIGNED ? (unsigned long long)ll > mu
+		                             : ll < ni || ll > pi))
+		    tcc_error("enumerator value outside the range of underlying type '%s'",
+			      get_tok_str(v, NULL));
                 ss = sym_push(v, &t, VT_CONST, 0);
                 ss->enum_val = ll;
                 *ps = ss, ps = &ss->next;
@@ -4612,7 +4627,7 @@ do_decl:
 	    check_fields(type, 0);
             struct_layout(type, &ad);
 	    if (debug_modes)
-		tcc_debug_fix_anon(tcc_state, type);
+		tcc_debug_fix_forw(tcc_state, type);
         }
     }
 }
@@ -4875,6 +4890,8 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
             sym_to_attr(ad, s);
             typespec_found = 1;
             st = bt = -2;
+	    if (type->ref && (t & VT_ARRAY) && type->ref->c < 0)
+	        type->ref = sym_push(SYM_FIELD, &type->ref->type, 0, type->ref->c);
             break;
         }
         type_found = 1;
@@ -4977,7 +4994,7 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                     type_decl(&pt, &ad1, &n, TYPE_DIRECT | TYPE_ABSTRACT | TYPE_PARAM);
                     if ((pt.t & VT_BTYPE) == VT_VOID)
                         tcc_error("parameter declared as void");
-                    if (n == 0)
+                    if (local_scope > 1 || n == 0)
                         n = SYM_FIELD;
                 } else {
                     n = tok;
@@ -4985,7 +5002,7 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                     pt.ref = NULL;
                     next();
                 }
-                if (n < TOK_UIDENT)
+                if (local_scope == 1 && n < TOK_UIDENT)
                     expect("identifier");
                 convert_parameter_type(&pt);
                 arg_size += (type_size(&pt, &align) + PTR_SIZE - 1) / PTR_SIZE;
@@ -5962,13 +5979,10 @@ ST_FUNC void unary(void)
 		    learn = 1;
 		next();
 	    } else {
-	        AttributeDef ad_tmp;
-		int itmp;
-	        CType cur_type;
-
-		parse_btype(&cur_type, &ad_tmp, 0);
-		type_decl(&cur_type, &ad_tmp, &itmp, TYPE_ABSTRACT);
-		if (compare_types(&controlling_type, &cur_type, 0)) {
+		int v;
+		parse_btype(&type, &ad, 0);
+		type_decl(&type, &ad, &v, TYPE_ABSTRACT);
+		if (compare_types(&controlling_type, &type, 0)) {
 		    if (has_match) {
 		      tcc_error("type match twice");
 		    }
@@ -7051,6 +7065,31 @@ static void lblock(int *bsym, int *csym)
     }
 }
 
+static void condition_expresion(void)
+{
+    Sym *s;
+    int decl_ret;
+
+    /* c2y if init decl? */
+    if (!(decl_ret = decl(VT_JMPI))) {
+        /* no, regular if init expr */
+        gexpr();
+    } else {
+	if (decl_ret == 1)
+	    tcc_error("declaration in the controlling expression must have an initializer");
+
+        if (tok == ';') {
+            /* finish the push */
+            next();
+            gexpr();
+        } else {
+            s = sym_find(decl_ret);
+            vset(&s->type, s->r, s->c);
+            vtop->sym = s;
+        }
+    }
+}
+
 static void block(int flags)
 {
     int a, b, c, d, e, t;
@@ -7071,7 +7110,7 @@ again:
     if (t == TOK_IF) {
         new_scope_s(&o);
         skip('(');
-        gexpr();
+        condition_expresion();
         a = gvtst(1, 0);
         skip(')');
         block(0);
@@ -7240,7 +7279,7 @@ again:
 
         new_scope_s(&o);
         skip('(');
-        gexpr();
+        condition_expresion();
         if (!is_integer_btype(vtop->type.t & VT_BTYPE))
             tcc_error("switch value not an integer");
         skip(')');
@@ -8562,7 +8601,9 @@ static void pe_check_linkage(CType *type, AttributeDef *ad)
 
 /* 'l' is VT_LOCAL or VT_CONST to define default storage type
    or VT_CMP if parsing old style parameter list
-   or VT_JMP if parsing c99 for decl: for (int i = 0, ...) */
+   or VT_JMP if parsing c99 for decl: for (int i = 0, ...)
+   or VT_JMPI if parsing c2y if decl; if (int = 0; ...)
+*/
 static int decl(int l)
 {
     int v, has_init, r, oldint;
@@ -8575,7 +8616,7 @@ static int decl(int l)
 
         oldint = 0;
         if (!parse_btype(&btype, &adbase, l == VT_LOCAL)) {
-            if (l == VT_JMP)
+            if (l == VT_JMP || l == VT_JMPI)
                 return 0;
             /* skip redundant ';' if not in old parameter decl scope */
             if (tok == ';' && l != VT_CMP) {
@@ -8646,7 +8687,9 @@ static int decl(int l)
                 sym = type.ref;
                 if (sym->f.func_type == FUNC_OLD && l == VT_CONST) {
                     func_vt = type;
+		    ++local_scope;
                     decl(VT_CMP);
+		    --local_scope;
                 }
                 if ((type.t & (VT_EXTERN|VT_INLINE)) == (VT_EXTERN|VT_INLINE)) {
                     /* always_inline functions must be handled as if they
@@ -8815,10 +8858,12 @@ static int decl(int l)
                     }
                 }
                 if (tok != ',') {
-                    if (l == VT_JMP)
+                    if (l == VT_JMP || l == VT_JMPI)
                         return has_init ? v : 1;
                     skip(';');
                     break;
+                } else if (l == VT_JMPI) {
+                    tcc_error("declaration in condition can only declare a single object");
                 }
                 next();
             }
