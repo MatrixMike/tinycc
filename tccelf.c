@@ -1237,6 +1237,17 @@ static int prepare_dynamic_rel(TCCState *s1, Section *sr)
             break;
 #if defined(TCC_TARGET_I386)
         case R_386_PC32:
+	{
+	    ElfW(Sym) *sym = &((ElfW(Sym) *)symtab_section->data)[sym_index];
+            /* Hidden defined symbols can and must be resolved locally.
+               We're misusing a PLT32 reloc for this, as that's always
+               resolved to its address even in shared libs.  */
+	    if (sym->st_shndx != SHN_UNDEF &&
+		ELFW(ST_VISIBILITY)(sym->st_other) == STV_HIDDEN) {
+                rel->r_info = ELFW(R_INFO)(sym_index, R_386_PLT32);
+	        break;
+	    }
+	}
 #elif defined(TCC_TARGET_X86_64)
         case R_X86_64_PC32:
 	{
@@ -1455,6 +1466,18 @@ redo:
                     continue;
             }
 
+#ifdef TCC_TARGET_I386
+            if ((type == R_386_PLT32 || type == R_386_PC32) &&
+		sym->st_shndx != SHN_UNDEF &&
+                (ELFW(ST_VISIBILITY)(sym->st_other) != STV_DEFAULT ||
+		 ELFW(ST_BIND)(sym->st_info) == STB_LOCAL ||
+		 s1->output_type & TCC_OUTPUT_EXE)) {
+		if (pass != 0)
+		    continue;
+                rel->r_info = ELFW(R_INFO)(sym_index, R_386_PC32);
+                continue;
+            }
+#endif
 #ifdef TCC_TARGET_X86_64
             if ((type == R_X86_64_PLT32 || type == R_X86_64_PC32) &&
 		sym->st_shndx != SHN_UNDEF &&
@@ -1816,6 +1839,9 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
             else
                 tcc_add_dll(s1, TCC_LIBGCC, AFF_PRINT_ERROR);
         }
+#endif
+#if defined CONFIG_TCC_PIC && defined TCC_TARGET_I386
+        tcc_add_support(s1, "get_pc_thunk.o");
 #endif
 #if defined TCC_TARGET_ARM && TARGETOS_FreeBSD
         tcc_add_library(s1, "gcc_s"); // unwind code
@@ -2419,8 +2445,10 @@ static int layout_sections(TCCState *s1, int *sec_order, struct dyn_inf *d)
         if (s->sh_type != SHT_NOBITS)
             file_offset += s->sh_size;
 
-        ph->p_filesz = file_offset - ph->p_offset;
-        ph->p_memsz = addr - ph->p_vaddr;
+        if (ph) {
+            ph->p_filesz = file_offset - ph->p_offset;
+            ph->p_memsz = addr - ph->p_vaddr;
+        }
     }
 
     /* Fill other headers */
@@ -2804,9 +2832,6 @@ static void create_arm_attribute_section(TCCState *s1)
 #endif
 
 #if TARGETOS_OpenBSD || TARGETOS_NetBSD || TARGETOS_FreeBSD
-#ifndef _WIN32
-#include <sys/utsname.h>
-#endif
 
 static void fill_bsd_note(Section *s, int type,
 			  const char *value, uint32_t data)
@@ -2839,12 +2864,9 @@ static Section *create_bsd_note_section(TCCState *s1,
 {
     Section *s;
     unsigned int major = 0, minor = 0, patch = 0;
-#ifndef _WIN32
-    struct utsname uts;
 
-/* Maybe move this to configure option for cross compiling */
-    if (!uname(&uts))
-	sscanf(uts.release, "%u.%u.%u", &major, &minor, &patch);
+#ifdef CONFIG_OS_RELEASE
+    sscanf(CONFIG_OS_RELEASE, "%u.%u.%u", &major, &minor, &patch);
 #endif
 #if TARGETOS_FreeBSD
     if (major < 14)

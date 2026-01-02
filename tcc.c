@@ -35,7 +35,7 @@ static const char help[] =
     "General options:\n"
     "  -c           compile only - generate an object file\n"
     "  -o outfile   set output filename\n"
-    "  -run         run compiled source\n"
+    "  -run         run compiled source [with custom stdin: -rstdin FILE]\n"
     "  -fflag       set or reset (with 'no-' prefix) 'flag' (see tcc -hh)\n"
     "  -Wwarning    set or reset (with 'no-' prefix) 'warning' (see tcc -hh)\n"
     "  -w           disable all warnings\n"
@@ -87,6 +87,8 @@ static const char help[] =
 #ifdef TCC_TARGET_PE
     "  create def file : tcc -impdef lib.dll [-v] [-o lib.def]\n"
 #endif
+    "Discussion & bug reports:\n"
+    "  https://lists.nongnu.org/mailman/listinfo/tinycc-devel\n"
     ;
 
 static const char help2[] =
