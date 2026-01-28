@@ -1840,9 +1840,6 @@ ST_FUNC void tcc_add_runtime(TCCState *s1)
                 tcc_add_dll(s1, TCC_LIBGCC, AFF_PRINT_ERROR);
         }
 #endif
-#if defined CONFIG_TCC_PIC && defined TCC_TARGET_I386
-        tcc_add_support(s1, "get_pc_thunk.o");
-#endif
 #if defined TCC_TARGET_ARM && TARGETOS_FreeBSD
         tcc_add_library(s1, "gcc_s"); // unwind code
 #endif
@@ -2615,6 +2612,10 @@ static int tcc_output_elf(TCCState *s1, FILE *f, int phnum, ElfW(Phdr) *phdr)
 
 #if TARGETOS_FreeBSD || TARGETOS_FreeBSD_kernel
     ehdr.e_ident[EI_OSABI] = ELFOSABI_FREEBSD;
+#elif TARGETOS_OpenBSD
+    ehdr.e_ident[EI_OSABI] = ELFOSABI_OPENBSD;
+#elif TARGETOS_NetBSD
+    ehdr.e_ident[EI_OSABI] = ELFOSABI_NETBSD;
 #elif defined TCC_TARGET_ARM && defined TCC_ARM_EABI
     ehdr.e_flags = EF_ARM_EABI_VER5;
     ehdr.e_flags |= s1->float_abi == ARM_HARD_FLOAT
@@ -3095,7 +3096,7 @@ static void alloc_sec_names(TCCState *s1, int is_obj)
 }
 
 /* Output an elf .o file */
-static int elf_output_obj(TCCState *s1, const char *filename)
+LIBTCCAPI int elf_output_obj(TCCState *s1, const char *filename)
 {
     Section *s;
     int i, ret, file_offset;
